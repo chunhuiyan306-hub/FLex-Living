@@ -9,10 +9,13 @@ import type {
   SpaceNode,
   UiLocale,
 } from "@/lib/domain/types";
-import { PRICE_LIBRARY, findLibraryEntry } from "@/lib/catalog/price-library";
+import { PRICE_LIBRARY, resolveProduct } from "@/lib/catalog/price-library";
 import { SPACE_PRESETS, mapSpaceLabel } from "@/lib/catalog/space-i18n";
 import { parseDimsFromText } from "@/lib/domain/units";
-import { suggestMethodFactor } from "@/lib/pricing/engine";
+import {
+  matchPriceRow,
+  evaluateNonStandard,
+} from "@/lib/pricing/engine";
 
 const uid = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
@@ -54,18 +57,19 @@ function emptySpace(key: string): SpaceNode {
 
 function demoWardrobeItem(): QuotationItem {
   const w = PRICE_LIBRARY.find((p) => p.id === "wardrobe-carcass")!;
+  const r0 = w.rows[0];
   return {
     id: uid(),
     productSystem: w.system,
-    sku: w.sku,
-    nameZh: w.nameZh,
-    nameEn: w.nameEn,
-    quoteMethod: w.quoteMethod,
+    sku: w.model,
+    nameZh: w.productNameZh,
+    nameEn: w.productNameEn,
+    quoteMethod: w.defaultPricingUnit,
     dimensionsMm: { width: 3200, height: 2800, depth: 600 },
     qty: 1,
-    finishGrade: "A",
-    finishMaterialZh: "天然木皮",
-    finishMaterialEn: "Natural Wood Veneer",
+    finishGrade: r0.finishGrade,
+    finishMaterialZh: r0.finishDescriptionZh,
+    finishMaterialEn: r0.finishDescriptionEn,
     hardwareNoteZh: "Blum 铰链",
     hardwareNoteEn: "Blum hinges",
     lightingNoteZh: "",
@@ -73,7 +77,12 @@ function demoWardrobeItem(): QuotationItem {
     remarkZh: "含上门测量一次",
     remarkEn: "Includes one site survey",
     screenshotIds: [],
+    libraryProductId: w.id,
     libraryRuleId: w.id,
+    productImages: [],
+    isFromPriceLibrary: true,
+    isManualPrice: false,
+    needReview: false,
     thresholdWarnings: [],
     cost_details: {
       factoryCost: 1200,
@@ -85,11 +94,11 @@ function demoWardrobeItem(): QuotationItem {
       manualPriceOverrides: [],
     },
     quote_details: {
-      listPrice: w.listPriceCNYPerUnit,
+      listPrice: r0.rrpCnyPerUnit,
       discountPct: 5,
       marginPct: 18,
       clientPrice: 0,
-      exclusions: w.defaultExclusionsZh,
+      exclusions: w.exclusionZh,
       nonStandardMultiplier: 1,
       nonStandardConfirmed: true,
       publicNote: "",
@@ -180,6 +189,47 @@ const boot = (() => {
   const sel = initialSelection(project);
   return { project, ...sel };
 })();
+
+function syncLineMeta(item: QuotationItem) {
+  const prod = resolveProduct(item);
+  const row = matchPriceRow(prod, item);
+  if (row) {
+    item.matchedIntervalLabelZh = row.interval.labelZh;
+    item.matchedIntervalLabelEn = row.interval.labelEn;
+    item.quote_details.listPrice = row.rrpCnyPerUnit;
+  } else {
+    item.matchedIntervalLabelZh = undefined;
+    item.matchedIntervalLabelEn = undefined;
+  }
+  const ns = evaluateNonStandard(prod, item.dimensionsMm);
+  item.quote_details.nonStandardMultiplier = ns.factor;
+  if (ns.requiresSeparateQuote) {
+    item.needReview = true;
+    item.thresholdWarnings = [
+      "触发「需另外报价」规则（如墙厚超限），请人工确认",
+    ];
+    return;
+  }
+  if (
+    !row &&
+    prod &&
+    !item.isManualPrice &&
+    item.quoteMethod !== "custom"
+  ) {
+    item.needReview = true;
+    item.thresholdWarnings = [
+      "未命中价格表尺寸区间，请填写自定义单价或开启「人工价格」并说明原因",
+    ];
+    return;
+  }
+  if (ns.factor > 1 && !item.quote_details.nonStandardConfirmed) {
+    item.thresholdWarnings = [
+      `规则加成 ×${ns.factor.toFixed(2)}，请点击确认非标`,
+    ];
+    return;
+  }
+  item.thresholdWarnings = [];
+}
 
 export const useQuotationStore = create<Store>()(
   persist(
@@ -275,18 +325,22 @@ export const useQuotationStore = create<Store>()(
             .find((sp) => sp.id === spaceId);
           if (!space) return s;
           const lib = PRICE_LIBRARY[0];
+          const sampleRow = lib.rows[0];
           const item: QuotationItem = {
             id: uid(),
             productSystem: template?.productSystem ?? lib.system,
-            sku: template?.sku ?? lib.sku,
-            nameZh: template?.nameZh ?? lib.nameZh,
-            nameEn: template?.nameEn ?? lib.nameEn,
-            quoteMethod: template?.quoteMethod ?? lib.quoteMethod,
+            sku: template?.sku ?? lib.model,
+            nameZh: template?.nameZh ?? lib.productNameZh,
+            nameEn: template?.nameEn ?? lib.productNameEn,
+            quoteMethod:
+              template?.quoteMethod ?? lib.defaultPricingUnit,
             dimensionsMm: template?.dimensionsMm ?? {},
             qty: template?.qty ?? 1,
-            finishGrade: template?.finishGrade ?? "A",
-            finishMaterialZh: template?.finishMaterialZh ?? "",
-            finishMaterialEn: template?.finishMaterialEn ?? "",
+            finishGrade: template?.finishGrade ?? sampleRow?.finishGrade ?? "A",
+            finishMaterialZh:
+              template?.finishMaterialZh ?? sampleRow?.finishDescriptionZh ?? "",
+            finishMaterialEn:
+              template?.finishMaterialEn ?? sampleRow?.finishDescriptionEn ?? "",
             hardwareNoteZh: template?.hardwareNoteZh ?? "",
             hardwareNoteEn: template?.hardwareNoteEn ?? "",
             lightingNoteZh: template?.lightingNoteZh ?? "",
@@ -294,7 +348,23 @@ export const useQuotationStore = create<Store>()(
             remarkZh: template?.remarkZh ?? "",
             remarkEn: template?.remarkEn ?? "",
             screenshotIds: template?.screenshotIds ?? [],
-            libraryRuleId: template?.libraryRuleId ?? lib.id,
+            libraryProductId:
+              template?.libraryProductId ??
+              template?.libraryRuleId ??
+              lib.id,
+            libraryRuleId:
+              template?.libraryRuleId ??
+              template?.libraryProductId ??
+              lib.id,
+            libraryRowId: template?.libraryRowId,
+            productImages: template?.productImages ?? [],
+            isFromPriceLibrary: template?.isFromPriceLibrary ?? true,
+            isManualPrice: template?.isManualPrice ?? false,
+            needReview: template?.needReview ?? false,
+            overrideReason: template?.overrideReason,
+            clientNotes: template?.clientNotes,
+            specificationZh: template?.specificationZh,
+            specificationEn: template?.specificationEn,
             thresholdWarnings: [],
             cost_details: template?.cost_details ?? {
               factoryCost: 0,
@@ -302,24 +372,17 @@ export const useQuotationStore = create<Store>()(
               manualPriceOverrides: [],
             },
             quote_details: {
-              listPrice: lib.listPriceCNYPerUnit,
+              listPrice: sampleRow?.rrpCnyPerUnit ?? 0,
               discountPct: 0,
               marginPct: 0,
               clientPrice: 0,
-              exclusions: lib.defaultExclusionsZh,
+              exclusions: lib.exclusionZh,
               nonStandardMultiplier: 1,
               nonStandardConfirmed: false,
               ...template?.quote_details,
             },
           };
-          const factor = suggestMethodFactor(
-            item,
-            findLibraryEntry(item.libraryRuleId),
-          );
-          if (factor > 1) {
-            item.quote_details.nonStandardMultiplier = factor;
-            item.thresholdWarnings.push("检测到大尺寸加价，请确认非标系数");
-          }
+          syncLineMeta(item);
           space.items.push(item);
           return {
             project: root,
@@ -358,19 +421,13 @@ export const useQuotationStore = create<Store>()(
           if (
             patch.dimensionsMm ||
             patch.libraryRuleId ||
+            patch.libraryProductId ||
+            patch.libraryRowId ||
             patch.finishGrade ||
-            patch.quoteMethod
+            patch.quoteMethod ||
+            patch.isManualPrice
           ) {
-            const entry = findLibraryEntry(item.libraryRuleId);
-            const factor = suggestMethodFactor(item, entry);
-            item.quote_details.nonStandardMultiplier = factor;
-            if (factor > 1 && !item.quote_details.nonStandardConfirmed) {
-              item.thresholdWarnings = [
-                `规则加成 ×${factor.toFixed(2)}，请点击确认非标`,
-              ];
-            } else {
-              item.thresholdWarnings = [];
-            }
+            syncLineMeta(item);
           }
           return { project: root };
         }),

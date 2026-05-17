@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { CURRENCY_SYMBOL, PRODUCT_SYSTEM_LABEL, SPACE_PRESETS } from "@/lib/catalog/space-i18n";
-import { PRICE_LIBRARY, findLibraryEntry } from "@/lib/catalog/price-library";
+import { PRICE_LIBRARY, resolveProduct } from "@/lib/catalog/price-library";
 import { downloadExcel } from "@/lib/export/excel";
 import { buildCustomerPdfBlob } from "@/lib/export/pdf-client";
 import { computeLine } from "@/lib/pricing/engine";
@@ -468,7 +468,7 @@ export default function Workspace() {
                   {items.map((it) => {
                     const line = computeLine(
                       it,
-                      findLibraryEntry(it.libraryRuleId),
+                      resolveProduct(it),
                       rev.rates,
                     );
                     const label =
@@ -642,14 +642,38 @@ function ConfigForm({
   onRemove: () => void;
   onApplyText: (t: string) => void;
 }) {
-  const entry = findLibraryEntry(item.libraryRuleId);
+  const entry = resolveProduct(item);
   const line = computeLine(item, entry, rates);
   const sym = CURRENCY_SYMBOL[currency];
+  const pid = item.libraryProductId ?? item.libraryRuleId ?? "";
+  const depthLocked = entry?.depthLockedMm;
 
   const [ocr, setOcr] = useState("Walk-in Closet 2400 x 2800 mm");
 
   return (
     <div className="space-y-4">
+      {(item.needReview || item.isManualPrice) ? (
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {item.needReview
+            ? uiLocale === "zh"
+              ? "待审核：未匹配区间或自定义价格"
+              : "Pending review"
+            : null}
+          {item.isManualPrice
+            ? uiLocale === "zh"
+              ? " · 人工价格"
+              : " · Manual price"
+            : null}
+        </div>
+      ) : null}
+      {item.matchedIntervalLabelZh ? (
+        <div className="text-[11px] text-ink-secondary">
+          {uiLocale === "zh" ? "匹配区间：" : "Matched band: "}
+          {uiLocale === "zh"
+            ? item.matchedIntervalLabelZh
+            : item.matchedIntervalLabelEn ?? item.matchedIntervalLabelZh}
+        </div>
+      ) : null}
       <div className="rounded-2xl border border-line bg-surface-muted/40 p-3 text-xs text-ink-secondary">
         <div className="font-semibold text-ink">SKU</div>
         <div>{item.sku}</div>
@@ -666,34 +690,63 @@ function ConfigForm({
       </div>
 
       <label className="block text-xs font-semibold text-ink-tertiary">
-        {uiLocale === "zh" ? "价格库" : "Price library"}
+        {uiLocale === "zh" ? "价格库产品" : "Price book product"}
         <select
           className="mt-1 w-full rounded-2xl border border-line bg-white px-3 py-2 text-sm"
-          value={item.libraryRuleId}
+          value={pid}
           onChange={(e) => {
-            const lib = findLibraryEntry(e.target.value);
+            const lib = PRICE_LIBRARY.find((p) => p.id === e.target.value);
             if (!lib) return;
+            const r0 = lib.rows[0];
             onPatch({
+              libraryProductId: lib.id,
               libraryRuleId: lib.id,
-              sku: lib.sku,
-              nameZh: lib.nameZh,
-              nameEn: lib.nameEn,
-              quoteMethod: lib.quoteMethod,
+              libraryRowId: undefined,
+              sku: lib.model,
+              nameZh: lib.productNameZh,
+              nameEn: lib.productNameEn,
+              quoteMethod: lib.defaultPricingUnit,
               productSystem: lib.system,
+              finishGrade: r0?.finishGrade ?? item.finishGrade,
+              finishMaterialZh: r0?.finishDescriptionZh ?? item.finishMaterialZh,
+              finishMaterialEn: r0?.finishDescriptionEn ?? item.finishMaterialEn,
+              dimensionsMm: {
+                ...item.dimensionsMm,
+                depth: lib.depthLockedMm ?? item.dimensionsMm.depth,
+              },
               quote_details: {
                 ...item.quote_details,
-                listPrice: lib.listPriceCNYPerUnit,
-                exclusions: lib.defaultExclusionsZh,
+                listPrice: r0?.rrpCnyPerUnit ?? 0,
+                exclusions: lib.exclusionZh,
               },
             });
           }}
         >
           {PRICE_LIBRARY.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.sku} · {uiLocale === "zh" ? p.nameZh : p.nameEn}
+              {p.model} · {uiLocale === "zh" ? p.productNameZh : p.productNameEn}
             </option>
           ))}
         </select>
+      </label>
+
+      <label className="flex items-center gap-2 text-xs text-ink-secondary">
+        <input
+          type="checkbox"
+          checked={item.isManualPrice}
+          onChange={(e) => onPatch({ isManualPrice: e.target.checked })}
+        />
+        {uiLocale === "zh" ? "人工价格 / 未入库补价" : "Manual / off-book price"}
+      </label>
+
+      <label className="block text-xs font-semibold text-ink-tertiary">
+        {uiLocale === "zh" ? "补价 / 改价原因" : "Override reason"}
+        <input
+          type="text"
+          className="mt-1 w-full rounded-2xl border border-line px-3 py-2 text-sm"
+          value={item.overrideReason ?? ""}
+          onChange={(e) => onPatch({ overrideReason: e.target.value })}
+        />
       </label>
 
       <div className="grid grid-cols-2 gap-2">
@@ -711,13 +764,29 @@ function ConfigForm({
             onPatch({ dimensionsMm: { ...item.dimensionsMm, height: Number(v) || undefined } })
           }
         />
-        <Field
-          label={uiLocale === "zh" ? "深 mm" : "D mm"}
-          value={item.dimensionsMm.depth ?? ""}
-          onChange={(v) =>
-            onPatch({ dimensionsMm: { ...item.dimensionsMm, depth: Number(v) || undefined } })
-          }
-        />
+        {depthLocked !== undefined ? (
+          <label className="block text-xs font-semibold text-ink-tertiary">
+            {uiLocale === "zh" ? "深 mm（工厂固定）" : "D mm (fixed)"}
+            <input
+              className="mt-1 w-full cursor-not-allowed rounded-2xl border border-line bg-surface-muted px-3 py-2 text-sm"
+              disabled
+              value={depthLocked}
+            />
+          </label>
+        ) : (
+          <Field
+            label={uiLocale === "zh" ? "深 mm" : "D mm"}
+            value={item.dimensionsMm.depth ?? ""}
+            onChange={(v) =>
+              onPatch({
+                dimensionsMm: {
+                  ...item.dimensionsMm,
+                  depth: Number(v) || undefined,
+                },
+              })
+            }
+          />
+        )}
         <Field
           label={uiLocale === "zh" ? "数量" : "Qty"}
           value={item.qty}
@@ -725,7 +794,7 @@ function ConfigForm({
         />
       </div>
 
-      {item.thresholdWarnings.length ? (
+      {(item.thresholdWarnings ?? []).length ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           {item.thresholdWarnings.join(" ")}
           <button
@@ -745,19 +814,14 @@ function ConfigForm({
         </div>
       ) : null}
 
-      {entry?.constraintNotesZh.length ? (
+      {entry?.notesZh ? (
         <div className="rounded-2xl border border-line bg-white px-3 py-2 text-xs text-ink-secondary">
           <div className="font-semibold text-ink">
-            {uiLocale === "zh" ? "阈值/备注" : "Constraints"}
+            {uiLocale === "zh" ? "产品备注" : "Product notes"}
           </div>
-          <ul className="mt-1 list-disc pl-4">
-            {(uiLocale === "zh"
-              ? entry.constraintNotesZh
-              : entry.constraintNotesEn
-            ).map((n) => (
-              <li key={n}>{n}</li>
-            ))}
-          </ul>
+          <p className="mt-1">
+            {uiLocale === "zh" ? entry.notesZh : entry.notesEn ?? entry.notesZh}
+          </p>
         </div>
       ) : null}
 
@@ -768,13 +832,49 @@ function ConfigForm({
           value={item.quoteMethod}
           onChange={(e) => onPatch({ quoteMethod: e.target.value as QuoteMethod })}
         >
-          {(["set", "sqm", "lm", "pc", "leaf"] as QuoteMethod[]).map((m) => (
+          {(["set", "sqm", "lm", "m", "pc", "leaf", "custom"] as QuoteMethod[]).map((m) => (
             <option key={m} value={m}>
               {m}
             </option>
           ))}
         </select>
       </label>
+
+      {item.quoteMethod === "custom" ? (
+        <label className="block text-xs font-semibold text-ink-tertiary">
+          {uiLocale === "zh" ? "自定义行总价（CNY）" : "Custom line total (CNY)"}
+          <input
+            type="number"
+            className="mt-1 w-full rounded-2xl border border-line px-3 py-2 text-sm"
+            value={item.quote_details.manualLineTotalCny ?? ""}
+            onChange={(e) =>
+              onPatch({
+                quote_details: {
+                  ...item.quote_details,
+                  manualLineTotalCny: Number(e.target.value) || 0,
+                },
+              })
+            }
+          />
+        </label>
+      ) : (
+        <label className="block text-xs font-semibold text-ink-tertiary">
+          {uiLocale === "zh" ? "参考单价 CNY（未匹配库时）" : "Ref. unit price CNY"}
+          <input
+            type="number"
+            className="mt-1 w-full rounded-2xl border border-line px-3 py-2 text-sm"
+            value={item.quote_details.listPrice}
+            onChange={(e) =>
+              onPatch({
+                quote_details: {
+                  ...item.quote_details,
+                  listPrice: Number(e.target.value) || 0,
+                },
+              })
+            }
+          />
+        </label>
+      )}
 
       <label className="block text-xs font-semibold text-ink-tertiary">
         {uiLocale === "zh" ? "饰面等级" : "Finish grade"}

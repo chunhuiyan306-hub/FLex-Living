@@ -1,6 +1,6 @@
 import type { QuotationItem, RateTable, ValidationIssue } from "../domain/types";
-import { findLibraryEntry } from "../catalog/price-library";
-import { computeLine, oversizedFactor } from "../pricing/engine";
+import { matchPriceRow, computeLine, evaluateNonStandard } from "../pricing/engine";
+import { resolveProduct } from "../catalog/price-library";
 
 function itemHasDims(item: QuotationItem): boolean {
   const d = item.dimensionsMm;
@@ -48,7 +48,9 @@ export function validateRevision(rev: {
         }
         if (
           !itemHasDims(it) &&
-          (it.quoteMethod === "sqm" || it.quoteMethod === "lm")
+          (it.quoteMethod === "sqm" ||
+            it.quoteMethod === "lm" ||
+            it.quoteMethod === "m")
         ) {
           issues.push({
             code: "DIM",
@@ -59,19 +61,21 @@ export function validateRevision(rev: {
             spaceId: sp.id,
           });
         }
-        const entry = findLibraryEntry(it.libraryRuleId);
-        if (!it.quote_details.listPrice && !entry) {
+        const prod = resolveProduct(it);
+        const row = matchPriceRow(prod, it);
+        const manual = it.isManualPrice || it.quoteMethod === "custom";
+        if (!row && !manual && (it.quote_details.listPrice ?? 0) <= 0) {
           issues.push({
             code: "PRICE",
             severity: "error",
-            messageZh: "缺少单价（未匹配价格库且未手动填价）",
-            messageEn: "Missing unit price (no library match, no manual price)",
+            messageZh: "未命中价格表区间且未填单价（自定义/补价）",
+            messageEn: "No price band match and no manual unit price",
             itemId: it.id,
             spaceId: sp.id,
           });
         }
-        const { factor } = oversizedFactor(it, entry);
-        if (factor > 1 && !it.quote_details.nonStandardConfirmed) {
+        const ns = evaluateNonStandard(prod, it.dimensionsMm);
+        if (ns.factor > 1 && !it.quote_details.nonStandardConfirmed) {
           issues.push({
             code: "NONSTD",
             severity: "error",
@@ -81,12 +85,42 @@ export function validateRevision(rev: {
             spaceId: sp.id,
           });
         }
-        if (it.screenshotIds.length === 0) {
+        if (ns.requiresSeparateQuote) {
+          issues.push({
+            code: "SEPARATE_QUOTE",
+            severity: "error",
+            messageZh: "尺寸触发「需另外报价」规则，请人工确认或拆分报价",
+            messageEn: "Dimension triggers separate-quotation rule; confirm or split line",
+            itemId: it.id,
+            spaceId: sp.id,
+          });
+        }
+        if (it.needReview) {
+          issues.push({
+            code: "NEED_REVIEW",
+            severity: "warn",
+            messageZh: "存在待审核报价项（自定义价格或未匹配区间）",
+            messageEn: "Line pending review (manual price or no band match)",
+            itemId: it.id,
+            spaceId: sp.id,
+          });
+        }
+        if (it.isManualPrice && !(it.overrideReason?.trim())) {
+          issues.push({
+            code: "MANUAL_REASON",
+            severity: "warn",
+            messageZh: "自定义/补价建议填写原因，便于审核",
+            messageEn: "Manual price should include a reason for audit",
+            itemId: it.id,
+            spaceId: sp.id,
+          });
+        }
+        if ((it.screenshotIds?.length ?? 0) === 0 && (it.productImages?.length ?? 0) === 0) {
           issues.push({
             code: "SHOT",
             severity: "warn",
-            messageZh: "未绑定图纸截图",
-            messageEn: "No drawing screenshot linked",
+            messageZh: "未绑定图纸或产品图片",
+            messageEn: "No drawings or product images linked",
             itemId: it.id,
             spaceId: sp.id,
           });
@@ -123,8 +157,8 @@ export function revisionTotals(
   let client = 0;
   let list = 0;
   for (const it of items) {
-    const entry = findLibraryEntry(it.libraryRuleId);
-    const c = computeLine(it, entry, rates);
+    const prod = resolveProduct(it);
+    const c = computeLine(it, prod, rates);
     client += c.clientPrice;
     list += c.subtotalList;
   }

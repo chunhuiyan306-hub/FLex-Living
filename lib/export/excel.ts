@@ -4,7 +4,7 @@ import type {
   QuotationRevision,
   SpaceNode,
 } from "../domain/types";
-import { findLibraryEntry } from "../catalog/price-library";
+import { resolveProduct } from "../catalog/price-library";
 import { computeLine, moneyFromCNY } from "../pricing/engine";
 import { PRODUCT_SYSTEM_LABEL } from "../catalog/space-i18n";
 
@@ -47,7 +47,7 @@ export function buildWorkbook(
     for (const sp of lvl.spaces) {
       let sub = 0;
       for (const it of sp.items) {
-        sub += computeLine(it, findLibraryEntry(it.libraryRuleId), rev.rates)
+        sub += computeLine(it, resolveProduct(it), rev.rates)
           .clientPrice;
       }
       spaceRows.push([lvl.name, sp.nameZh, sp.nameEn, sub]);
@@ -100,8 +100,8 @@ export function buildWorkbook(
   for (const lvl of rev.levels) {
     for (const sp of lvl.spaces) {
       for (const it of sp.items) {
-        const entry = findLibraryEntry(it.libraryRuleId);
-        const line = computeLine(it, entry, rev.rates);
+        const prod = resolveProduct(it);
+        const line = computeLine(it, prod, rev.rates);
         const sys = PRODUCT_SYSTEM_LABEL[it.productSystem];
         const row: (string | number)[] = [
           sp.nameZh,
@@ -114,7 +114,7 @@ export function buildWorkbook(
           it.quoteMethod,
           line.qty,
           moneyFromCNY(
-            entry?.listPriceCNYPerUnit ?? it.quote_details.listPrice,
+            line.unitRrpCny,
             rev.rates.base,
             rev.rates,
           ),

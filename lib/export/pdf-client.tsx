@@ -11,7 +11,7 @@ import {
 } from "@react-pdf/renderer";
 import type { QuotationRevision } from "@/lib/domain/types";
 import { CURRENCY_SYMBOL, PRODUCT_SYSTEM_LABEL } from "@/lib/catalog/space-i18n";
-import { findLibraryEntry } from "@/lib/catalog/price-library";
+import { resolveProduct } from "@/lib/catalog/price-library";
 import { computeLine } from "@/lib/pricing/engine";
 import { flattenRevisionItems, revisionTotals } from "@/lib/validation/checks";
 
@@ -116,7 +116,7 @@ export async function buildCustomerPdfBlob(rev: QuotationRevision) {
               {sp.items.map((it) => {
                 const line = computeLine(
                   it,
-                  findLibraryEntry(it.libraryRuleId),
+                  resolveProduct(it),
                   rev.rates,
                 );
                 const sys = PRODUCT_SYSTEM_LABEL[it.productSystem].en;
