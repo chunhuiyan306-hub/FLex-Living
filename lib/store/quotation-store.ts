@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type {
   CurrencyCode,
   DrawingPage,
+  ProjectInfo,
   ProjectRoot,
   QuotationItem,
   SpaceNode,
@@ -28,7 +29,7 @@ function defaultRates() {
 function sampleProject() {
   const today = new Date().toISOString().slice(0, 10);
   return {
-    brand: "Flex Living 凡仕之家",
+    brand: "FLEXLIVING 凡仕之家",
     projectName: "Riyadh Villa — Demo",
     clientName: "Confidential Client",
     quotationNo: `FL-${today.replace(/-/g, "")}-001`,
@@ -163,6 +164,8 @@ export interface Store {
     dataUrl?: string,
   ) => string;
   applyOcrText: (spaceId: string, itemId: string, text: string) => void;
+  /** 当前版本下的项目抬头（名称、客户、报价编号等） */
+  updateProjectInfo: (patch: Partial<ProjectInfo>) => void;
 }
 
 function initialSelection(project: ProjectRoot) {
@@ -452,6 +455,14 @@ export const useQuotationStore = create<Store>()(
             item.detectedDimsRaw = text;
             item.dimensionsMm = { ...item.dimensionsMm, ...dims };
           }
+          return { project: root };
+        }),
+
+      updateProjectInfo: (patch) =>
+        set((s) => {
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          Object.assign(rev.project, patch);
           return { project: root };
         }),
     }),

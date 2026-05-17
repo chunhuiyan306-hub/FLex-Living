@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "凡仕之家 · 全屋定制报价",
-  description: "Flex Living whole-house quotation workspace",
+  title: "FLEXLIVING 凡仕之家 · 报价工作台",
+  description: "FLEXLIVING whole-house millwork quotation workspace",
 };
 
 export default function RootLayout({

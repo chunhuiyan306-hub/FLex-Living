@@ -1,6 +1,7 @@
 "use client";
 
 import clsx from "clsx";
+import Image from "next/image";
 import {
   ChevronRight,
   Copy,
@@ -51,6 +52,7 @@ export default function Workspace() {
     removeItem,
     attachDrawing,
     applyOcrText,
+    updateProjectInfo,
   } = useQuotationStore();
 
   const rev = useMemo(() => activeRevision(project), [project]);
@@ -88,6 +90,7 @@ export default function Workspace() {
 
   const [exportNotes, setExportNotes] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
+  const [projectFieldsOpen, setProjectFieldsOpen] = useState(false);
   const revIndex = project.revisions.findIndex(
     (r) => r.meta.id === project.activeRevisionId,
   );
@@ -124,21 +127,108 @@ export default function Workspace() {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-line bg-surface-card/80 px-8 py-4 backdrop-blur-md">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">
-            {t("全屋定制报价工作台", "Millwork Quotation")}
-          </div>
-          <div className="text-xl font-semibold text-ink">
-            {rev.project.projectName}
-          </div>
-          <div className="mt-1 flex flex-wrap gap-2 text-xs text-ink-secondary">
-            <span className="rounded-full bg-surface-muted px-3 py-1">
-              {rev.meta.label}
-            </span>
-            <span className="rounded-full bg-surface-muted px-3 py-1">
-              {rev.project.quotationNo}
-            </span>
+      <header className="flex items-center justify-between gap-6 border-b border-line bg-surface-card/80 px-8 py-4 backdrop-blur-md">
+        <div className="flex min-w-0 flex-1 items-start gap-5">
+          <Image
+            src="/brand-logo.png"
+            alt="FLEXLIVING 凡仕之家"
+            width={200}
+            height={56}
+            className="h-12 w-auto max-w-[min(200px,28vw)] shrink-0 object-contain object-left"
+            priority
+          />
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              className="text-left text-xs font-medium uppercase tracking-wide text-ink-tertiary hover:text-ink-secondary"
+              onClick={() => setProjectFieldsOpen((v) => !v)}
+            >
+              {t("当前报价项目 · 点击展开更多信息", "Active quotation · More fields")}
+            </button>
+            <input
+              type="text"
+              className="mt-1 block w-full max-w-xl border-b border-transparent bg-transparent text-xl font-semibold text-ink outline-none transition placeholder:text-ink-tertiary hover:border-line focus:border-ink"
+              value={rev.project.projectName}
+              placeholder={t("项目名称", "Project name")}
+              onChange={(e) =>
+                updateProjectInfo({ projectName: e.target.value })
+              }
+              aria-label={t("项目名称", "Project name")}
+            />
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-secondary">
+              <span className="rounded-full bg-surface-muted px-3 py-1">
+                {rev.meta.label}
+              </span>
+              <input
+                type="text"
+                className="min-w-[8rem] max-w-[12rem] rounded-full border border-line bg-white px-3 py-1 text-xs outline-none focus:border-ink"
+                value={rev.project.quotationNo}
+                onChange={(e) =>
+                  updateProjectInfo({ quotationNo: e.target.value })
+                }
+                title={t("报价编号", "Quotation No.")}
+                aria-label={t("报价编号", "Quotation No.")}
+              />
+            </div>
+            {projectFieldsOpen ? (
+              <div className="mt-3 grid max-w-2xl grid-cols-1 gap-2 rounded-2xl border border-line/80 bg-surface-muted/30 p-3 sm:grid-cols-2">
+                <label className="block text-[11px] font-medium text-ink-tertiary">
+                  {t("品牌抬头（导出用）", "Brand (exports)")}
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none"
+                    value={rev.project.brand}
+                    onChange={(e) =>
+                      updateProjectInfo({ brand: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="block text-[11px] font-medium text-ink-tertiary">
+                  {t("客户名称", "Client")}
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none"
+                    value={rev.project.clientName}
+                    onChange={(e) =>
+                      updateProjectInfo({ clientName: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="block text-[11px] font-medium text-ink-tertiary">
+                  {t("报价日期", "Quote date")}
+                  <input
+                    type="date"
+                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none"
+                    value={rev.project.date}
+                    onChange={(e) =>
+                      updateProjectInfo({ date: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="block text-[11px] font-medium text-ink-tertiary">
+                  {t("报价人", "Quoted by")}
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none"
+                    value={rev.project.quotedBy}
+                    onChange={(e) =>
+                      updateProjectInfo({ quotedBy: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="block text-[11px] font-medium text-ink-tertiary sm:col-span-2">
+                  {t("审核人", "Reviewed by")}
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none"
+                    value={rev.project.reviewedBy}
+                    onChange={(e) =>
+                      updateProjectInfo({ reviewedBy: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
