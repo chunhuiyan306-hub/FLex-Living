@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { Square, Trash2, XCircle } from "lucide-react";
+import { ExternalLink, Square, Trash2, XCircle } from "lucide-react";
 import type { DrawingPage } from "@/lib/domain/types";
 import type { QuotationItem } from "@/lib/domain/types";
 
@@ -44,21 +44,26 @@ export default function DrawingRegionPicker({
   const wrapRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
   const [marking, setMarking] = useState(false);
+  const [dragSeq, setDragSeq] = useState(0);
   const drag = useRef<{
     startX: number;
     startY: number;
     curX: number;
     curY: number;
   } | null>(null);
+
+  /** PDF 画布已绘好第一页；图片模式始终视为可操作。 */
+  const [pdfRendered, setPdfRendered] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  /** Bumped by ResizeObserver so PDF page scale follows sidebar width changes. */
-  const [layoutBump, setLayoutBump] = useState(0);
 
   const isPdf =
     drawing.mimeType === "application/pdf" ||
     drawing.fileName.toLowerCase().endsWith(".pdf");
+
+  const canMark = !isPdf || pdfRendered;
 
   const t = useCallback(
     (zh: string, en: string) => (uiLocale === "zh" ? zh : en),
@@ -66,56 +71,69 @@ export default function DrawingRegionPicker({
   );
 
   useEffect(() => {
-    if (!isPdf || !drawing.previewUrl) return;
+    if (!isPdf || !drawing.previewUrl) {
+      setPdfRendered(false);
+      setPdfBusy(false);
+      setPdfError(null);
+      return;
+    }
 
-    let cancel = false;
-    const cv = canvasRef.current;
-    if (!cv) return;
+    let alive = true;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
     setPdfBusy(true);
+    setPdfRendered(false);
     setPdfError(null);
 
-    (async () => {
+    void (async () => {
       try {
         const pdfjs = await import("pdfjs-dist");
-        pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+        if (typeof window !== "undefined") {
+          /** 与主包同目录的 worker，由 scripts/copy-pdf-worker.cjs 复制到 public/ */
+          pdfjs.GlobalWorkerOptions.workerSrc = `${window.location.origin}/pdf.worker.min.mjs`;
+        }
 
         const pdf = await pdfjs.getDocument({
           url: drawing.previewUrl!,
+          withCredentials: false,
         }).promise;
-        if (cancel) return;
+        if (!alive) return;
+
         const page = await pdf.getPage(1);
         const base = page.getViewport({ scale: 1 });
-        const maxW = Math.min(wrapRef.current?.clientWidth ?? 520, 640);
-        const scale = Math.min(maxW / base.width, 1.85);
+
+        const cw = wrapRef.current?.clientWidth ?? 0;
+        const maxW = Math.min(Math.max(cw, 280), 720);
+        const scale = Math.min(maxW / base.width, 2);
         const viewport = page.getViewport({ scale });
-        const ctx = cv.getContext("2d");
-        if (!ctx) return;
+
+        const cv = canvasRef.current;
+        const ctx = cv?.getContext("2d");
+        if (!alive || !cv || !ctx) return;
+
         cv.width = viewport.width;
         cv.height = viewport.height;
         await page.render({ canvasContext: ctx, viewport }).promise;
+
+        if (!alive) return;
+        setPdfRendered(true);
       } catch (e) {
-        if (!cancel) {
-          console.error(e);
-          setPdfError(String(e));
-        }
+        if (!alive) return;
+        console.error(e);
+        setPdfError(String(e));
+        setPdfRendered(false);
       } finally {
-        if (!cancel) setPdfBusy(false);
+        if (alive) setPdfBusy(false);
       }
     })();
 
     return () => {
-      cancel = true;
+      alive = false;
     };
-  }, [drawing.previewUrl, drawing.id, isPdf, layoutBump]);
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el || !isPdf) return;
-    const ro = new ResizeObserver(() => setLayoutBump((n) => n + 1));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [isPdf]);
+  }, [drawing.previewUrl, drawing.id, isPdf]);
 
   const finishDrag = () => {
     const el = innerRef.current;
@@ -144,11 +162,7 @@ export default function DrawingRegionPicker({
     };
 
     const n = drawing.screenshots.length + 1;
-    onAddRegion(
-      norm,
-      `计价区域 ${n}`,
-      `Quoted area ${n}`,
-    );
+    onAddRegion(norm, `计价区域 ${n}`, `Quoted area ${n}`);
   };
 
   const overlays = marking && drag.current && innerRef.current;
@@ -159,6 +173,7 @@ export default function DrawingRegionPicker({
     const x = e.clientX - box.left;
     const y = e.clientY - box.top;
     drag.current = { startX: x, startY: y, curX: x, curY: y };
+    setDragSeq((s) => (s + 1) % 1_000_000);
   };
 
   const onOverlayMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -166,16 +181,7 @@ export default function DrawingRegionPicker({
     const box = innerRef.current.getBoundingClientRect();
     drag.current.curX = e.clientX - box.left;
     drag.current.curY = e.clientY - box.top;
-    e.currentTarget.style.setProperty("--x1", `${Math.min(drag.current.startX, drag.current.curX)}px`);
-    e.currentTarget.style.setProperty("--y1", `${Math.min(drag.current.startY, drag.current.curY)}px`);
-    e.currentTarget.style.setProperty(
-      "--w",
-      `${Math.abs(drag.current.curX - drag.current.startX)}px`,
-    );
-    e.currentTarget.style.setProperty(
-      "--h",
-      `${Math.abs(drag.current.curY - drag.current.startY)}px`,
-    );
+    setDragSeq((s) => (s + 1) % 1_000_000);
   };
 
   return (
@@ -194,76 +200,132 @@ export default function DrawingRegionPicker({
         </button>
       </div>
 
+      {drawing.previewUrl ? (
+        <div className="mb-2 rounded-xl border border-dashed border-line/70 bg-surface-muted/30 px-2 py-2 text-ink-secondary [&_a]:text-sky-700 [&_a:hover]:underline">
+          <ol className="list-decimal space-y-0.5 pl-4 leading-relaxed">
+            <li>
+              {t(
+                "等待上方预览出现（PDF 需数秒；若失败可点下方「新窗口打开」）。",
+                "Wait for the preview. If it fails, open the file in a new tab below.",
+              )}
+            </li>
+            <li>
+              {t(
+                "点击「框选举价区域」后，在图面上按住拖动画矩形。",
+                "Click “Draw quoting area”, then drag on the image to draw a rectangle.",
+              )}
+            </li>
+            <li>
+              {t(
+                "在下面「区域与报价行关联」里勾选对应报价行（可多选）。",
+                "Below, link each region to one or more quotation rows.",
+              )}
+            </li>
+          </ol>
+          <div className="mt-1.5 flex flex-wrap gap-2 pt-1 text-[11px]">
+            <a
+              href={drawing.previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1"
+            >
+              <ExternalLink size={12} />
+              {t("新窗口打开图纸", "Open file in new tab")}
+            </a>
+          </div>
+        </div>
+      ) : null}
+
       <div
         ref={wrapRef}
-        className="flex w-full justify-center overflow-hidden rounded-xl bg-black/5"
+        className="relative flex w-full justify-center overflow-hidden rounded-xl bg-black/5 min-h-[120px]"
       >
-        {isPdf ? (
-          pdfBusy ? (
-            <div className="flex h-40 w-full items-center justify-center text-ink-secondary">
-              {t("载入 PDF …", "Loading PDF …")}
-            </div>
-          ) : pdfError ? (
-            <div className="w-full p-3 text-xs text-red-700">
-              {t("PDF 预览失败。", "PDF preview failed.")}{" "}
-              {pdfError.slice(0, 120)}
-            </div>
-          ) : (
-            <div ref={innerRef} className="relative inline-block max-h-[400px] max-w-full">
-              <canvas
-                ref={canvasRef}
-                className="mx-auto block max-h-[400px] max-w-full"
-              />
+        {isPdf && drawing.previewUrl ? (
+          <div ref={innerRef} className="relative inline-block max-h-[400px] max-w-full align-top">
+            <canvas
+              ref={canvasRef}
+              className="mx-auto block max-h-[400px] max-w-full align-top opacity-95"
+              aria-hidden={!pdfRendered}
+            />
 
-              {/* 已保存区域 */}
-              {drawing.screenshots.map((sh) => {
-                const p = getRectPayload(sh.annotations);
-                if (!p) return null;
-                return (
-                  <div
-                    key={sh.id}
-                    className="pointer-events-none absolute z-[1] border-2 border-amber-500/90 bg-amber-400/15"
-                    style={{
-                      left: `${p.nx * 100}%`,
-                      top: `${p.ny * 100}%`,
-                      width: `${p.nw * 100}%`,
-                      height: `${p.nh * 100}%`,
-                    }}
-                    title={sh.name}
-                  />
-                );
-              })}
-
-              {marking && (
+            {drawing.screenshots.map((sh) => {
+              const p = getRectPayload(sh.annotations);
+              if (!p) return null;
+              return (
                 <div
-                  role="presentation"
-                  className="absolute inset-0 z-[2] cursor-crosshair"
+                  key={sh.id}
+                  className="pointer-events-none absolute z-[1] border-2 border-amber-500/90 bg-amber-400/15"
                   style={{
-                    background:
-                      overlays && drag.current ? undefined : "rgba(0,0,0,0.05)",
+                    left: `${p.nx * 100}%`,
+                    top: `${p.ny * 100}%`,
+                    width: `${p.nw * 100}%`,
+                    height: `${p.nh * 100}%`,
                   }}
-                  onMouseDown={onOverlayMouseDown}
-                  onMouseMove={onOverlayMouseMove}
-                  onMouseUp={finishDrag}
-                  onMouseLeave={finishDrag}
-                >
-                  {overlays && drag.current && (
-                    <div
-                      className="pointer-events-none absolute border-2 border-sky-500 bg-sky-400/25"
-                      style={{
-                        left: `${Math.min(drag.current.startX, drag.current.curX)}px`,
-                        top: `${Math.min(drag.current.startY, drag.current.curY)}px`,
-                        width: `${Math.abs(drag.current.curX - drag.current.startX)}px`,
-                        height: `${Math.abs(drag.current.curY - drag.current.startY)}px`,
-                      }}
-                    />
-                  )}
+                  title={sh.name}
+                />
+              );
+            })}
+
+            {marking ? (
+              <div
+                role="presentation"
+                className="absolute inset-0 z-[2] cursor-crosshair"
+                style={{
+                  background:
+                    overlays && drag.current ? undefined : "rgba(0,0,0,0.05)",
+                }}
+                onMouseDown={onOverlayMouseDown}
+                onMouseMove={onOverlayMouseMove}
+                onMouseUp={finishDrag}
+                onMouseLeave={finishDrag}
+              >
+                {overlays && drag.current ? (
+                  <div
+                    className="pointer-events-none absolute border-2 border-sky-500 bg-sky-400/25"
+                    style={{
+                      left: `${Math.min(drag.current.startX, drag.current.curX)}px`,
+                      top: `${Math.min(drag.current.startY, drag.current.curY)}px`,
+                      width: `${Math.abs(drag.current.curX - drag.current.startX)}px`,
+                      height: `${Math.abs(drag.current.curY - drag.current.startY)}px`,
+                    }}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {(pdfBusy || !pdfRendered) && pdfError === null ? (
+              <div className="absolute inset-0 z-[3] flex flex-col items-center justify-center gap-2 bg-black/30 px-3 text-center text-white">
+                <div className="text-xs font-medium">
+                  {pdfBusy
+                    ? t("载入 PDF…", "Loading PDF…")
+                    : t(
+                        "预览准备中…",
+                        "Rendering…",
+                      )}
                 </div>
-              )}
-            </div>
-          )
+              </div>
+            ) : null}
+
+            {pdfError ? (
+              <div className="absolute inset-0 z-[4] overflow-auto bg-black/80 p-2 text-[11px] leading-snug text-white">
+                <div className="font-semibold">
+                  {t("PDF 无法在此侧边栏渲染", "Could not render PDF here")}
+                </div>
+                <p className="mt-1 text-white/90">{pdfError.slice(0, 220)}</p>
+                <a
+                  href={drawing.previewUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 underline"
+                >
+                  <ExternalLink size={12} />
+                  {t("用浏览器自带阅读器打开", "Open with browser")}
+                </a>
+              </div>
+            ) : null}
+          </div>
         ) : drawing.previewUrl ? (
-          <div ref={innerRef} className="relative inline-block max-h-[400px] max-w-full">
+          <div ref={innerRef} className="relative inline-block max-h-[400px] max-w-full align-top">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={drawing.previewUrl}
@@ -288,7 +350,7 @@ export default function DrawingRegionPicker({
                 />
               );
             })}
-            {marking && (
+            {marking ? (
               <div
                 role="presentation"
                 className="absolute inset-0 z-[2] cursor-crosshair"
@@ -301,7 +363,7 @@ export default function DrawingRegionPicker({
                 onMouseUp={finishDrag}
                 onMouseLeave={finishDrag}
               >
-                {overlays && drag.current && (
+                {overlays && drag.current ? (
                   <div
                     className="pointer-events-none absolute border-2 border-sky-500 bg-sky-400/25"
                     style={{
@@ -311,12 +373,12 @@ export default function DrawingRegionPicker({
                       height: `${Math.abs(drag.current.curY - drag.current.startY)}px`,
                     }}
                   />
-                )}
+                ) : null}
               </div>
-            )}
+            ) : null}
           </div>
         ) : (
-          <div className="flex h-24 w-full items-center justify-center text-ink-secondary">
+          <div className="flex min-h-[6rem] w-full items-center justify-center text-ink-secondary">
             {t("无预览地址", "No preview")}
           </div>
         )}
@@ -325,13 +387,24 @@ export default function DrawingRegionPicker({
       <div className="mt-2 flex flex-wrap gap-2">
         <button
           type="button"
+          disabled={!drawing.previewUrl || !canMark || Boolean(pdfError)}
+          title={
+            !drawing.previewUrl
+              ? ""
+              : !canMark && isPdf
+                ? t("请等待 PDF 预览就绪", "Wait for PDF to finish loading.")
+                : ""
+          }
           className={clsx(
             "inline-flex items-center gap-1 rounded-full border px-2 py-1",
             marking
               ? "border-sky-600 bg-sky-50 text-sky-900"
               : "border-line bg-surface-muted",
+            (!drawing.previewUrl || !canMark || Boolean(pdfError)) &&
+              "cursor-not-allowed opacity-55",
           )}
           onClick={() => {
+            if (!drawing.previewUrl || !canMark || pdfError) return;
             if (marking) {
               drag.current = null;
               setMarking(false);
@@ -354,8 +427,8 @@ export default function DrawingRegionPicker({
         {drawing.screenshots.length === 0 ? (
           <div className="text-ink-secondary">
             {t(
-              "在图纸上拖拽矩形后，可把该区域对应到表格中的某一报价行（可多选）。",
-              "After drawing rectangles, attach them to quotation rows.",
+              "画好矩形后会出现在此处，再把区域绑定到表格中的报价行。",
+              "Regions show up here; link each one to quotation rows.",
             )}
           </div>
         ) : (
@@ -408,8 +481,8 @@ export default function DrawingRegionPicker({
                 </label>
                 <p className="text-[10px] text-ink-tertiary">
                   {t(
-                    "Windows：按住 Ctrl 点选多项；关联后表格行可作对照。",
-                    "Ctrl/Cmd-click multiple rows if needed.",
+                    "按住 Ctrl（Mac 用 ⌘）可点选多条。",
+                    "Ctrl/Cmd-click to select multiple rows.",
                   )}
                 </p>
               </div>
@@ -417,7 +490,7 @@ export default function DrawingRegionPicker({
           })
         )}
       </div>
-
+      {marking ? <span aria-hidden className="sr-only">{dragSeq}</span> : null}
     </div>
   );
 }
