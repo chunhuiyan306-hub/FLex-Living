@@ -5,3 +5,5 @@ dist
 *.log
 .env*.local
 .DS_Store
+data/
+_inspect_xlsx_dump.json

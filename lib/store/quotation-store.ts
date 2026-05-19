@@ -9,7 +9,11 @@ import type {
   SpaceNode,
   UiLocale,
 } from "@/lib/domain/types";
-import { PRICE_LIBRARY, resolveProduct } from "@/lib/catalog/price-library";
+import {
+  PRICE_LIBRARY,
+  resolveProduct,
+  getProduct,
+} from "@/lib/catalog/price-library";
 import { SPACE_PRESETS, mapSpaceLabel } from "@/lib/catalog/space-i18n";
 import { parseDimsFromText } from "@/lib/domain/units";
 import {
@@ -55,9 +59,10 @@ function emptySpace(key: string): SpaceNode {
   };
 }
 
-function demoWardrobeItem(): QuotationItem {
-  const w = PRICE_LIBRARY.find((p) => p.id === "wardrobe-carcass")!;
-  const r0 = w.rows[0];
+/** 新建项目时的示例行：绑定价格库第一项（Excel 导入），避免再引用已移除的演示 SKU。 */
+function defaultItemFromCatalog(): QuotationItem {
+  const w = PRICE_LIBRARY[0]!;
+  const r0 = w.rows[0]!;
   return {
     id: uid(),
     productSystem: w.system,
@@ -79,7 +84,7 @@ function demoWardrobeItem(): QuotationItem {
     screenshotIds: [],
     libraryProductId: w.id,
     libraryRuleId: w.id,
-    productImages: [],
+    productImages: w.productImageUrls ? [...w.productImageUrls] : [],
     isFromPriceLibrary: true,
     isManualPrice: false,
     needReview: false,
@@ -110,7 +115,7 @@ function initialProject(): ProjectRoot {
   const levelId = uid();
   const revId = uid();
   const closet = emptySpace("walk_in_closet");
-  closet.items.push(demoWardrobeItem());
+  closet.items.push(defaultItemFromCatalog());
   return {
     id: uid(),
     activeRevisionId: revId,
@@ -229,6 +234,39 @@ function syncLineMeta(item: QuotationItem) {
     return;
   }
   item.thresholdWarnings = [];
+}
+
+/** 升级或缓存损坏时：把仍指向已删 demo / 旧 id 的行迁回当前价格库（首项）。 */
+function repairOrphanLibraryItems(project: ProjectRoot) {
+  const fallback = PRICE_LIBRARY[0];
+  if (!fallback) return;
+  const r0 = fallback.rows[0];
+  for (const rev of project.revisions) {
+    for (const level of rev.levels) {
+      for (const space of level.spaces) {
+        for (const item of space.items) {
+          if (getProduct(item.libraryProductId ?? item.libraryRuleId)) continue;
+          item.libraryProductId = fallback.id;
+          item.libraryRuleId = fallback.id;
+          item.libraryRowId = undefined;
+          item.sku = fallback.model;
+          item.nameZh = fallback.productNameZh;
+          item.nameEn = fallback.productNameEn;
+          item.quoteMethod = fallback.defaultPricingUnit;
+          item.productSystem = fallback.system;
+          item.finishGrade = r0?.finishGrade ?? "A";
+          item.finishMaterialZh = r0?.finishDescriptionZh ?? "";
+          item.finishMaterialEn = r0?.finishDescriptionEn ?? "";
+          item.quote_details.listPrice = r0?.rrpCnyPerUnit ?? 0;
+          item.quote_details.exclusions = fallback.exclusionZh;
+          item.productImages = fallback.productImageUrls
+            ? [...fallback.productImageUrls]
+            : [];
+          syncLineMeta(item);
+        }
+      }
+    }
+  }
 }
 
 export const useQuotationStore = create<Store>()(
@@ -357,7 +395,9 @@ export const useQuotationStore = create<Store>()(
               template?.libraryProductId ??
               lib.id,
             libraryRowId: template?.libraryRowId,
-            productImages: template?.productImages ?? [],
+            productImages:
+              template?.productImages ??
+              (lib.productImageUrls ? [...lib.productImageUrls] : []),
             isFromPriceLibrary: template?.isFromPriceLibrary ?? true,
             isManualPrice: template?.isManualPrice ?? false,
             needReview: template?.needReview ?? false,
@@ -523,7 +563,17 @@ export const useQuotationStore = create<Store>()(
           return { project: root };
         }),
     }),
-    { name: "flexliving-quotation-store-v1" },
+    {
+      name: "flexliving-quotation-store-v1",
+      merge: (persisted, current) => {
+        const next = {
+          ...current,
+          ...(persisted as Partial<Store>),
+        } as Store;
+        if (next.project) repairOrphanLibraryItems(next.project);
+        return next;
+      },
+    },
   ),
 );
 

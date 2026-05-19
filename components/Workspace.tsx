@@ -648,6 +648,23 @@ function ConfigForm({
   const pid = item.libraryProductId ?? item.libraryRuleId ?? "";
   const depthLocked = entry?.depthLockedMm;
 
+  const libraryGroups = useMemo(() => {
+    const m = new Map<string, typeof PRICE_LIBRARY>();
+    for (const p of PRICE_LIBRARY) {
+      const k = p.categoryZh;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(p);
+    }
+    return [...m.entries()].sort(([a], [b]) =>
+      a.localeCompare(b, uiLocale === "zh" ? "zh-Hans-CN" : "en"),
+    );
+  }, [uiLocale]);
+
+  const displayProductImages =
+    (entry?.productImageUrls?.length ? entry.productImageUrls : undefined) ??
+    (item.productImages?.length ? item.productImages : undefined) ??
+    [];
+
   const [ocr, setOcr] = useState("Walk-in Closet 2400 x 2800 mm");
 
   return (
@@ -689,6 +706,40 @@ function ConfigForm({
         </div>
       </div>
 
+      {displayProductImages.length > 0 ? (
+        <div className="rounded-2xl border border-line bg-white p-3">
+          <div className="mb-2 text-xs font-semibold text-ink">
+            {uiLocale === "zh" ? "产品图" : "Product images"}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {displayProductImages.map((src) => (
+              <a
+                key={src}
+                href={src}
+                target="_blank"
+                rel="noreferrer"
+                className="relative block h-28 w-28 overflow-hidden rounded-xl border border-line"
+              >
+                <Image
+                  src={src}
+                  alt=""
+                  fill
+                  unoptimized
+                  className="object-cover"
+                  sizes="112px"
+                />
+              </a>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-ink-tertiary">
+          {uiLocale === "zh"
+            ? "暂无图片：若 Excel「图片」列为文件名，请将同名文件放到项目的 public/catalog/ 目录后重新运行导入脚本；也可直接在列中填写 http(s) 链接。"
+            : "No images yet: use the Excel image column (URL or filename under public/catalog/), then re-run the import script."}
+        </p>
+      )}
+
       <label className="block text-xs font-semibold text-ink-tertiary">
         {uiLocale === "zh" ? "价格库产品" : "Price book product"}
         <select
@@ -719,13 +770,18 @@ function ConfigForm({
                 listPrice: r0?.rrpCnyPerUnit ?? 0,
                 exclusions: lib.exclusionZh,
               },
+              productImages: lib.productImageUrls ? [...lib.productImageUrls] : [],
             });
           }}
         >
-          {PRICE_LIBRARY.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.model} · {uiLocale === "zh" ? p.productNameZh : p.productNameEn}
-            </option>
+          {libraryGroups.map(([cat, list]) => (
+            <optgroup key={cat} label={cat}>
+              {list.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.model} · {uiLocale === "zh" ? p.productNameZh : p.productNameEn}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </label>

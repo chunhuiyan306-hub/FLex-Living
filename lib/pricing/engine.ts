@@ -44,7 +44,8 @@ function widthDepthOkForRow(
 }
 
 /**
- * 匹配价格行：同饰面等级 + 宽高深落在区间；若无精确高度匹配，取「高度上限仍小于实际高度」中上限最大的一档作为单价来源（用于超高后乘非标系数）。
+ * 匹配价格行：同饰面等级 + 宽×深可先筛候选人；再在候选人中找宽高深完全落入区间的行。
+ * 若无完全落入：先按「超高」取已有 heightMax 最大且仍小于实际高度的档，再同理按「超宽」取 widthMax 最大档（便于配合非标备注与 UI 调价）。
  */
 export function matchPriceRow(
   product: PriceLibraryProduct | undefined,
@@ -56,11 +57,6 @@ export function matchPriceRow(
   const d = item.dimensionsMm.depth ?? product.depthLockedMm ?? 0;
   const effD = product.depthLockedMm ?? d;
   const g = item.finishGrade;
-
-  if (item.libraryRowId) {
-    const locked = product.rows.find((r) => r.id === item.libraryRowId);
-    if (locked && locked.finishGrade === g) return locked;
-  }
 
   const candidates = product.rows.filter(
     (r) => r.finishGrade === g && widthDepthOkForRow(w, effD, r.interval),
@@ -82,7 +78,19 @@ export function matchPriceRow(
       best = r;
     }
   }
-  return best;
+  if (best) return best;
+
+  let bestW: PriceLibraryRow | null = null;
+  let bestWMax = -1;
+  for (const r of candidates) {
+    const wMax = r.interval.widthMaxMm;
+    if (wMax === undefined) continue;
+    if (w > wMax && wMax > bestWMax) {
+      bestWMax = wMax;
+      bestW = r;
+    }
+  }
+  return bestW;
 }
 
 export interface BillingDims {
