@@ -59,6 +59,14 @@ function emptySpace(key: string): SpaceNode {
   };
 }
 
+function revokeSpaceDrawingUrls(space: SpaceNode) {
+  for (const d of space.drawings) {
+    if (d.previewUrl?.startsWith("blob:")) {
+      URL.revokeObjectURL(d.previewUrl);
+    }
+  }
+}
+
 /** 新建项目时的示例行：绑定价格库第一项（Excel 导入），避免再引用已移除的演示 SKU。 */
 function defaultItemFromCatalog(): QuotationItem {
   const w = PRICE_LIBRARY[0]!;
@@ -162,6 +170,7 @@ export interface Store {
   setCurrency: (c: CurrencyCode) => void;
   setRate: (c: CurrencyCode, cnyPerUnit: number) => void;
   addSpace: (levelId: string, key: string) => void;
+  removeSpace: (levelId: string, spaceId: string) => void;
   addItem: (spaceId: string, template?: Partial<QuotationItem>) => void;
   duplicateItem: (spaceId: string, itemId: string) => void;
   updateItem: (
@@ -171,6 +180,26 @@ export interface Store {
   ) => void;
   removeItem: (spaceId: string, itemId: string) => void;
   attachDrawing: (spaceId: string, file: File) => void;
+  removeDrawing: (spaceId: string, drawingId: string) => void;
+  /** 在平面上拖拽框选的归一化矩形 (0~1)，新增为一条「计价区域」并可后续关联报价行 */
+  addDrawingRectRegion: (
+    spaceId: string,
+    drawingId: string,
+    norm: { nx: number; ny: number; nw: number; nh: number },
+    nameZh: string,
+    nameEn: string,
+  ) => string;
+  setScreenshotLinkedItems: (
+    spaceId: string,
+    drawingId: string,
+    screenshotId: string,
+    linkedItemIds: string[],
+  ) => void;
+  removeDrawingScreenshot: (
+    spaceId: string,
+    drawingId: string,
+    screenshotId: string,
+  ) => void;
   addScreenshot: (
     spaceId: string,
     drawingId: string,
@@ -334,6 +363,32 @@ export const useQuotationStore = create<Store>()(
           return { project: root };
         }),
 
+      removeSpace: (levelId, spaceId) =>
+        set((s) => {
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          const level = rev.levels.find((l) => l.id === levelId);
+          if (!level || level.spaces.length <= 1) return s;
+          const dead = level.spaces.find((sp) => sp.id === spaceId);
+          if (!dead) return s;
+          revokeSpaceDrawingUrls(dead);
+          level.spaces = level.spaces.filter((sp) => sp.id !== spaceId);
+
+          let nextSpaceId = s.selectedSpaceId;
+          let nextLevelId = s.selectedLevelId;
+          if (s.selectedSpaceId === spaceId) {
+            nextSpaceId = level.spaces[0]?.id;
+            nextLevelId = levelId;
+          }
+          return {
+            project: root,
+            selectedSpaceId: nextSpaceId,
+            selectedLevelId: nextLevelId,
+            selectedItemId: undefined,
+            configDrawerOpen: false,
+          };
+        }),
+
       duplicateItem: (spaceId, itemId) =>
         set((s) => {
           const root = structuredClone(s.project);
@@ -345,7 +400,7 @@ export const useQuotationStore = create<Store>()(
           if (!space || !src) return s;
           const copy = structuredClone(src);
           copy.id = uid();
-          copy.screenshotIds = [...src.screenshotIds];
+          copy.screenshotIds = [];
           space.items.push(copy);
           return {
             project: root,
@@ -480,6 +535,11 @@ export const useQuotationStore = create<Store>()(
             .flatMap((l) => l.spaces)
             .find((sp) => sp.id === spaceId);
           if (!space) return s;
+          for (const d of space.drawings) {
+            for (const sh of d.screenshots) {
+              sh.linkedItemIds = sh.linkedItemIds.filter((id) => id !== itemId);
+            }
+          }
           space.items = space.items.filter((i) => i.id !== itemId);
           return {
             project: root,
@@ -501,10 +561,129 @@ export const useQuotationStore = create<Store>()(
             id: uid(),
             name: file.name,
             fileName: file.name,
+            mimeType: file.type || undefined,
             previewUrl: url,
             screenshots: [],
           };
           space.drawings.push(page);
+          return { project: root };
+        }),
+
+      removeDrawing: (spaceId, drawingId) =>
+        set((s) => {
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          const space = rev.levels
+            .flatMap((l) => l.spaces)
+            .find((sp) => sp.id === spaceId);
+          const drawing = space?.drawings.find((d) => d.id === drawingId);
+          if (!space || !drawing) return s;
+          for (const sh of drawing.screenshots) {
+            for (const oid of sh.linkedItemIds) {
+              const it = space.items.find((x) => x.id === oid);
+              if (it) {
+                it.screenshotIds = it.screenshotIds.filter(
+                  (x) => x !== sh.id,
+                );
+              }
+            }
+          }
+          if (drawing.previewUrl?.startsWith("blob:")) {
+            URL.revokeObjectURL(drawing.previewUrl);
+          }
+          space.drawings = space.drawings.filter((d) => d.id !== drawingId);
+          return { project: root };
+        }),
+
+      addDrawingRectRegion: (spaceId, drawingId, norm, nameZh, nameEn) => {
+        const shotId = uid();
+        set((s) => {
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          const space = rev.levels
+            .flatMap((l) => l.spaces)
+            .find((sp) => sp.id === spaceId);
+          const drawing = space?.drawings.find((d) => d.id === drawingId);
+          if (!space || !drawing) return s;
+          drawing.screenshots.push({
+            id: shotId,
+            name: `${nameZh} (${nameEn})`,
+            annotations: [
+              {
+                id: uid(),
+                type: "rect",
+                payload: {
+                  nx: norm.nx,
+                  ny: norm.ny,
+                  nw: norm.nw,
+                  nh: norm.nh,
+                },
+              },
+            ],
+            linkedItemIds: [],
+          });
+          return { project: root };
+        });
+        return shotId;
+      },
+
+      setScreenshotLinkedItems: (
+        spaceId,
+        drawingId,
+        screenshotId,
+        linkedItemIds,
+      ) =>
+        set((s) => {
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          const space = rev.levels
+            .flatMap((l) => l.spaces)
+            .find((sp) => sp.id === spaceId);
+          const drawing = space?.drawings.find((d) => d.id === drawingId);
+          const shot = drawing?.screenshots.find((sh) => sh.id === screenshotId);
+          if (!space || !shot) return s;
+          const prev = [...shot.linkedItemIds];
+          for (const oid of prev) {
+            const it = space.items.find((i) => i.id === oid);
+            if (it) {
+              it.screenshotIds = it.screenshotIds.filter(
+                (x) => x !== screenshotId,
+              );
+            }
+          }
+          shot.linkedItemIds = [...linkedItemIds];
+          for (const nid of linkedItemIds) {
+            const it = space.items.find((i) => i.id === nid);
+            if (it && !it.screenshotIds.includes(screenshotId)) {
+              it.screenshotIds.push(screenshotId);
+            }
+          }
+          return { project: root };
+        }),
+
+      removeDrawingScreenshot: (spaceId, drawingId, screenshotId) =>
+        set((s) => {
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          const space = rev.levels
+            .flatMap((l) => l.spaces)
+            .find((sp) => sp.id === spaceId);
+          const drawing = space?.drawings.find((d) => d.id === drawingId);
+          if (!space || !drawing) return s;
+          const shot = drawing.screenshots.find((sh) => sh.id === screenshotId);
+          if (shot) {
+            for (const oid of shot.linkedItemIds) {
+              const it = space.items.find((i) => i.id === oid);
+              if (it) {
+                it.screenshotIds = it.screenshotIds.filter(
+                  (x) => x !== screenshotId,
+                );
+              }
+            }
+          }
+          drawing.screenshots = drawing.screenshots.filter(
+            (sh) => sh.id !== screenshotId,
+          );
           return { project: root };
         }),
 

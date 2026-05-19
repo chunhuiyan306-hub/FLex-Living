@@ -96,6 +96,8 @@ export interface DrawingPage {
   name: string;
   fileName: string;
   previewUrl?: string;
+  /** 原始文件 MIME（用于区分图片 / PDF，便于画布框选逻辑） */
+  mimeType?: string;
   screenshots: DrawingScreenshot[];
 }
 

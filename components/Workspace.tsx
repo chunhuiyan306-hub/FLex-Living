@@ -2,11 +2,13 @@
 
 import clsx from "clsx";
 import Image from "next/image";
+import DrawingRegionPicker from "@/components/DrawingRegionPicker";
 import {
   ChevronRight,
   Copy,
   FileSpreadsheet,
   FileText,
+  Layers,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -46,11 +48,16 @@ export default function Workspace() {
     setCurrency,
     setRate,
     addSpace,
+    removeSpace,
     addItem,
     duplicateItem,
     updateItem,
     removeItem,
     attachDrawing,
+    removeDrawing,
+    addDrawingRectRegion,
+    setScreenshotLinkedItems,
+    removeDrawingScreenshot,
     applyOcrText,
     updateProjectInfo,
   } = useQuotationStore();
@@ -356,22 +363,66 @@ export default function Workspace() {
               <div className="mb-2 text-sm font-medium text-ink-secondary">{lvl.name}</div>
               <div className="space-y-1">
                 {lvl.spaces.map((sp) => (
-                  <button
+                  <div
                     key={sp.id}
-                    type="button"
-                    onClick={() => selectSpace(lvl.id, sp.id)}
                     className={clsx(
-                      "flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition",
-                      sp.id === selectedContext?.spaceId
-                        ? "bg-surface-muted font-semibold text-ink"
-                        : "text-ink-secondary hover:bg-surface-muted/60",
+                      "flex min-w-0 items-stretch gap-1 rounded-2xl",
+                      sp.id === selectedContext?.spaceId ? "bg-surface-muted ring-1 ring-line/35" : "",
                     )}
                   >
-                    <span>
-                      {uiLocale === "zh" ? sp.nameZh : sp.nameEn}
-                    </span>
-                    <ChevronRight size={14} />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => selectSpace(lvl.id, sp.id)}
+                      className={clsx(
+                        "flex min-w-0 flex-1 items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm transition",
+                        sp.id === selectedContext?.spaceId
+                          ? "font-semibold text-ink"
+                          : "text-ink-secondary hover:bg-surface-muted/60",
+                      )}
+                    >
+                      <span className="min-w-0 truncate">
+                        {uiLocale === "zh" ? sp.nameZh : sp.nameEn}
+                      </span>
+                      <ChevronRight size={14} className="shrink-0 opacity-45" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={lvl.spaces.length <= 1}
+                      title={
+                        lvl.spaces.length <= 1
+                          ? t("每层至少需要保留一个空间", "Keep at least one space per level.")
+                          : t("删除当前空间", "Remove this space")
+                      }
+                      className={clsx(
+                        "shrink-0 rounded-xl px-2 py-2 text-red-700 transition",
+                        lvl.spaces.length <= 1
+                          ? "cursor-not-allowed opacity-35"
+                          : "hover:bg-red-50 hover:text-red-800",
+                      )}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (lvl.spaces.length <= 1) return;
+                        const nameLabel =
+                          uiLocale === "zh" ? sp.nameZh : sp.nameEn;
+                        const risky =
+                          sp.items.length > 0 || sp.drawings.length > 0;
+                        if (
+                          risky &&
+                          !window.confirm(
+                            uiLocale === "zh"
+                              ? `确定删除空间「${nameLabel}」吗？已有的报价项与图纸区域将一并移除。`
+                              : `Remove space "${nameLabel}"? This will delete its line items and drawing regions.`,
+                          )
+                        )
+                          return;
+                        removeSpace(lvl.id, sp.id);
+                      }}
+                      aria-label={t("删除空间", "Remove space")}
+                    >
+                      <Trash2 size={15} aria-hidden />
+                    </button>
+                  </div>
                 ))}
               </div>
               <div className="mt-2">
@@ -404,19 +455,50 @@ export default function Workspace() {
                 type="file"
                 accept="image/*,application/pdf"
                 className="text-xs"
+                key={selectedContext.spaceId}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f && selectedContext) attachDrawing(selectedContext.spaceId, f);
+                  if (f && selectedContext) {
+                    attachDrawing(selectedContext.spaceId, f);
+                    e.target.value = "";
+                  }
                 }}
               />
-              <div className="mt-2 space-y-1">
+              <div className="mt-2 space-y-3">
                 {selectedContext.space.drawings.map((d) => (
-                  <div
+                  <DrawingRegionPicker
                     key={d.id}
-                    className="rounded-xl bg-white px-2 py-1 text-xs text-ink-secondary"
-                  >
-                    {d.name}
-                  </div>
+                    uiLocale={uiLocale}
+                    drawing={d}
+                    items={selectedContext.space.items}
+                    onAddRegion={(norm, nameZh, nameEn) => {
+                      addDrawingRectRegion(
+                        selectedContext.spaceId,
+                        d.id,
+                        norm,
+                        nameZh,
+                        nameEn,
+                      );
+                    }}
+                    onLinkRegion={(screenshotId, itemIds) => {
+                      setScreenshotLinkedItems(
+                        selectedContext.spaceId,
+                        d.id,
+                        screenshotId,
+                        itemIds,
+                      );
+                    }}
+                    onRemoveScreenshot={(screenshotId) =>
+                      removeDrawingScreenshot(
+                        selectedContext.spaceId,
+                        d.id,
+                        screenshotId,
+                      )
+                    }
+                    onRemoveDrawing={() =>
+                      removeDrawing(selectedContext.spaceId, d.id)
+                    }
+                  />
                 ))}
               </div>
             </div>
@@ -485,7 +567,18 @@ export default function Workspace() {
                       >
                         <td className="px-4 py-3 text-ink-secondary">{label}</td>
                         <td className="px-4 py-3">
-                          {uiLocale === "zh" ? it.nameZh : it.nameEn}
+                          <span className="inline-flex flex-wrap items-center gap-1.5 align-middle">
+                            {uiLocale === "zh" ? it.nameZh : it.nameEn}
+                            {it.screenshotIds.length > 0 ? (
+                              <span
+                                className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0 text-[11px] font-medium text-amber-900 ring-1 ring-amber-200/80"
+                                title={t("已绑定图纸计价区域", "Linked to drawing region")}
+                              >
+                                <Layers size={12} aria-hidden />
+                                <span>{it.screenshotIds.length}</span>
+                              </span>
+                            ) : null}
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-xs text-ink-secondary">
                           {it.dimensionsMm.width ?? "—"} ×{" "}
