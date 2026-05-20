@@ -471,13 +471,14 @@ export default function Workspace() {
                     uiLocale={uiLocale}
                     drawing={d}
                     items={selectedContext.space.items}
-                    onAddRegion={(norm, nameZh, nameEn) => {
+                    onAddRegion={(norm, nameZh, nameEn, pdfPage) => {
                       addDrawingRectRegion(
                         selectedContext.spaceId,
                         d.id,
                         norm,
                         nameZh,
                         nameEn,
+                        pdfPage,
                       );
                     }}
                     onLinkRegion={(screenshotId, itemIds) => {

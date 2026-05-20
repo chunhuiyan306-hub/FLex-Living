@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { ExternalLink, Square, Trash2, XCircle } from "lucide-react";
-import type { DrawingPage } from "@/lib/domain/types";
-import type { QuotationItem } from "@/lib/domain/types";
+import { ChevronLeft, ChevronRight, ExternalLink, Square, Trash2, XCircle } from "lucide-react";
+import type { DrawingPage, DrawingScreenshot, QuotationItem } from "@/lib/domain/types";
 
 type Norm = { nx: number; ny: number; nw: number; nh: number };
 
@@ -24,6 +23,11 @@ function getRectPayload(annots: DrawingPage["screenshots"][0]["annotations"]) {
   return null;
 }
 
+function screenshotPage(sh: DrawingScreenshot): number {
+  const p = sh.pdfPage;
+  return typeof p === "number" && p >= 1 ? p : 1;
+}
+
 export default function DrawingRegionPicker({
   uiLocale,
   drawing,
@@ -36,7 +40,12 @@ export default function DrawingRegionPicker({
   uiLocale: "zh" | "en";
   drawing: DrawingPage;
   items: QuotationItem[];
-  onAddRegion: (norm: Norm, zhLabel: string, enLabel: string) => void;
+  onAddRegion: (
+    norm: Norm,
+    zhLabel: string,
+    enLabel: string,
+    pdfPage?: number,
+  ) => void;
   onLinkRegion: (screenshotId: string, itemIds: string[]) => void;
   onRemoveScreenshot: (screenshotId: string) => void;
   onRemoveDrawing: () => void;
@@ -44,6 +53,14 @@ export default function DrawingRegionPicker({
   const wrapRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** 同一图纸复用已打开的 PDF，避免翻页时重复下载解析 */
+  const pdfCacheRef = useRef<{
+    key: string;
+    doc: import("pdfjs-dist").PDFDocumentProxy | null;
+  }>({ key: "", doc: null });
+
+  const [viewerPdfPage, setViewerPdfPage] = useState(1);
+  const [pdfNumPages, setPdfNumPages] = useState(0);
 
   const [marking, setMarking] = useState(false);
   const [dragSeq, setDragSeq] = useState(0);
@@ -54,7 +71,7 @@ export default function DrawingRegionPicker({
     curY: number;
   } | null>(null);
 
-  /** PDF 画布已绘好第一页；图片模式始终视为可操作。 */
+  /** PDF 当前页画布已绘好；图片模式始终视为可操作。 */
   const [pdfRendered, setPdfRendered] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -71,10 +88,26 @@ export default function DrawingRegionPicker({
   );
 
   useEffect(() => {
+    const teardownKey = `${drawing.id}|${drawing.previewUrl ?? ""}`;
+    return () => {
+      if (pdfCacheRef.current.key === teardownKey) {
+        void pdfCacheRef.current.doc?.destroy();
+        pdfCacheRef.current = { key: "", doc: null };
+      }
+    };
+  }, [drawing.id, drawing.previewUrl]);
+
+  useEffect(() => {
+    setMarking(false);
+    drag.current = null;
+  }, [viewerPdfPage]);
+
+  useEffect(() => {
     if (!isPdf || !drawing.previewUrl) {
       setPdfRendered(false);
       setPdfBusy(false);
       setPdfError(null);
+      setPdfNumPages(0);
       return;
     }
 
@@ -82,6 +115,8 @@ export default function DrawingRegionPicker({
 
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    const key = `${drawing.id}|${drawing.previewUrl}`;
 
     setPdfBusy(true);
     setPdfRendered(false);
@@ -96,13 +131,31 @@ export default function DrawingRegionPicker({
           pdfjs.GlobalWorkerOptions.workerSrc = `${window.location.origin}/pdf.worker.min.mjs`;
         }
 
-        const pdf = await pdfjs.getDocument({
-          url: drawing.previewUrl!,
-          withCredentials: false,
-        }).promise;
-        if (!alive) return;
+        let doc = pdfCacheRef.current.doc;
+        if (!doc || pdfCacheRef.current.key !== key) {
+          await pdfCacheRef.current.doc?.destroy();
+          doc = await pdfjs.getDocument({
+            url: drawing.previewUrl!,
+            withCredentials: false,
+          }).promise;
+          if (!alive) {
+            await doc.destroy();
+            return;
+          }
+          pdfCacheRef.current = { key, doc };
+        }
 
-        const page = await pdf.getPage(1);
+        const docReady = pdfCacheRef.current.doc!;
+        const n = docReady.numPages;
+        if (!alive) return;
+        setPdfNumPages(n);
+
+        const pageNum = Math.min(Math.max(1, viewerPdfPage), n);
+        if (pageNum !== viewerPdfPage) {
+          setViewerPdfPage(pageNum);
+        }
+
+        const page = await docReady.getPage(pageNum);
         const base = page.getViewport({ scale: 1 });
 
         const cw = wrapRef.current?.clientWidth ?? 0;
@@ -133,7 +186,7 @@ export default function DrawingRegionPicker({
     return () => {
       alive = false;
     };
-  }, [drawing.previewUrl, drawing.id, isPdf]);
+  }, [drawing.previewUrl, drawing.id, isPdf, viewerPdfPage]);
 
   const finishDrag = () => {
     const el = innerRef.current;
@@ -162,7 +215,12 @@ export default function DrawingRegionPicker({
     };
 
     const n = drawing.screenshots.length + 1;
-    onAddRegion(norm, `计价区域 ${n}`, `Quoted area ${n}`);
+    onAddRegion(
+      norm,
+      `计价区域 ${n}`,
+      `Quoted area ${n}`,
+      isPdf ? viewerPdfPage : undefined,
+    );
   };
 
   const overlays = marking && drag.current && innerRef.current;
@@ -205,8 +263,8 @@ export default function DrawingRegionPicker({
           <ol className="list-decimal space-y-0.5 pl-4 leading-relaxed">
             <li>
               {t(
-                "等待上方预览出现（PDF 需数秒；若失败可点下方「新窗口打开」）。",
-                "Wait for the preview. If it fails, open the file in a new tab below.",
+                "等待上方预览出现（多页 PDF 用「上一页/下一页」切换后再框选；若失败可点「新窗口打开」）。",
+                "Wait for the preview. Multi-page PDFs: use prev/next, then draw regions. Or open in a new tab if preview fails.",
               )}
             </li>
             <li>
@@ -236,6 +294,34 @@ export default function DrawingRegionPicker({
         </div>
       ) : null}
 
+      {isPdf && drawing.previewUrl && pdfNumPages > 1 && !pdfError ? (
+        <div className="mb-2 flex flex-wrap items-center justify-center gap-2 rounded-xl border border-line/60 bg-white/90 px-2 py-1.5 shadow-sm">
+          <button
+            type="button"
+            className="inline-flex items-center rounded-lg border border-line bg-white px-2 py-1 hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={viewerPdfPage <= 1 || pdfBusy}
+            onClick={() => setViewerPdfPage((p) => Math.max(1, p - 1))}
+            aria-label={t("上一页", "Previous page")}
+          >
+            <ChevronLeft size={16} aria-hidden />
+          </button>
+          <span className="min-w-[5.5rem] text-center font-medium tabular-nums text-ink">
+            {t(`第 ${viewerPdfPage} / ${pdfNumPages} 页`, `Page ${viewerPdfPage} / ${pdfNumPages}`)}
+          </span>
+          <button
+            type="button"
+            className="inline-flex items-center rounded-lg border border-line bg-white px-2 py-1 hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={viewerPdfPage >= pdfNumPages || pdfBusy}
+            onClick={() =>
+              setViewerPdfPage((p) => Math.min(pdfNumPages, p + 1))
+            }
+            aria-label={t("下一页", "Next page")}
+          >
+            <ChevronRight size={16} aria-hidden />
+          </button>
+        </div>
+      ) : null}
+
       <div
         ref={wrapRef}
         className="relative flex w-full justify-center overflow-hidden rounded-xl bg-black/5 min-h-[120px]"
@@ -249,6 +335,7 @@ export default function DrawingRegionPicker({
             />
 
             {drawing.screenshots.map((sh) => {
+              if (screenshotPage(sh) !== viewerPdfPage) return null;
               const p = getRectPayload(sh.annotations);
               if (!p) return null;
               return (
@@ -440,7 +527,14 @@ export default function DrawingRegionPicker({
                 className="flex flex-col gap-1 rounded-xl bg-surface-muted/50 p-2"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-ink">{sh.name}</span>
+                  <span className="text-ink">
+                    {sh.name}
+                    {isPdf ? (
+                      <span className="ml-1.5 align-middle inline-flex rounded-md bg-amber-100 px-1 py-0 text-[10px] font-semibold text-amber-900 ring-1 ring-amber-200/80">
+                        P{screenshotPage(sh)}
+                      </span>
+                    ) : null}
+                  </span>
                   <button
                     type="button"
                     className="rounded p-0.5 text-red-600 hover:bg-white"

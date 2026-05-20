@@ -188,6 +188,7 @@ export interface Store {
     norm: { nx: number; ny: number; nw: number; nh: number },
     nameZh: string,
     nameEn: string,
+    pdfPage?: number,
   ) => string;
   setScreenshotLinkedItems: (
     spaceId: string,
@@ -595,7 +596,7 @@ export const useQuotationStore = create<Store>()(
           return { project: root };
         }),
 
-      addDrawingRectRegion: (spaceId, drawingId, norm, nameZh, nameEn) => {
+      addDrawingRectRegion: (spaceId, drawingId, norm, nameZh, nameEn, pdfPage) => {
         const shotId = uid();
         set((s) => {
           const root = structuredClone(s.project);
@@ -605,9 +606,14 @@ export const useQuotationStore = create<Store>()(
             .find((sp) => sp.id === spaceId);
           const drawing = space?.drawings.find((d) => d.id === drawingId);
           if (!space || !drawing) return s;
+          const page =
+            typeof pdfPage === "number" && pdfPage >= 1
+              ? Math.floor(pdfPage)
+              : undefined;
           drawing.screenshots.push({
             id: shotId,
             name: `${nameZh} (${nameEn})`,
+            ...(page !== undefined ? { pdfPage: page } : {}),
             annotations: [
               {
                 id: uid(),

@@ -87,6 +87,8 @@ export interface DrawingScreenshot {
   id: string;
   name: string;
   dataUrl?: string;
+  /** PDF 上的页码（从 1 起）；图片或未标定时省略，按第 1 页处理 */
+  pdfPage?: number;
   annotations: DrawingAnnotation[];
   linkedItemIds: string[];
 }

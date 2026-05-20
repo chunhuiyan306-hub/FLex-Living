@@ -91,7 +91,12 @@ export function buildWorkbook(
     const names: string[] = [];
     for (const d of space.drawings) {
       for (const s of d.screenshots) {
-        if (item.screenshotIds.includes(s.id)) names.push(s.name);
+        if (item.screenshotIds.includes(s.id)) {
+          const p = s.pdfPage;
+          names.push(
+            typeof p === "number" && p >= 1 ? `${s.name} (P${p})` : s.name,
+          );
+        }
       }
     }
     return names.join("; ");
