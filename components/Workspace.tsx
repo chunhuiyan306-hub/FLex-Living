@@ -4,17 +4,21 @@ import clsx from "clsx";
 import Image from "next/image";
 import DrawingRegionPicker from "@/components/DrawingRegionPicker";
 import {
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   FileSpreadsheet,
   FileText,
   Layers,
+  Maximize2,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   Trash2,
+  X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CURRENCY_SYMBOL, PRODUCT_SYSTEM_LABEL, SPACE_PRESETS } from "@/lib/catalog/space-i18n";
 import { PRICE_LIBRARY, resolveProduct } from "@/lib/catalog/price-library";
 import { downloadExcel } from "@/lib/export/excel";
@@ -30,6 +34,7 @@ import {
   revisionTotals,
 } from "@/lib/validation/checks";
 import type { CurrencyCode, FinishGrade, ProductSystemCategory, QuoteMethod } from "@/lib/domain/types";
+import { screenshotHasPricingRect } from "@/lib/domain/drawing-utils";
 
 export default function Workspace() {
   const {
@@ -56,10 +61,10 @@ export default function Workspace() {
     attachDrawing,
     removeDrawing,
     addDrawingRectRegion,
-    setScreenshotLinkedItems,
     removeDrawingScreenshot,
     applyOcrText,
     updateProjectInfo,
+    ensureDedicatedItemForScreenshot,
   } = useQuotationStore();
 
   const rev = useMemo(() => activeRevision(project), [project]);
@@ -80,6 +85,9 @@ export default function Workspace() {
 
   const items = selectedContext?.space.items ?? [];
   const activeItem = items.find((i) => i.id === selectedItemId);
+  const t = (zh: string, en: string) => (uiLocale === "zh" ? zh : en);
+  const sym = CURRENCY_SYMBOL[rev.currency];
+
   const totals = useMemo(() => {
     const all = levels.flatMap((l) => l.spaces.flatMap((s) => s.items));
     const projectTotal = revisionTotals(all, rev.rates).client;
@@ -98,6 +106,88 @@ export default function Workspace() {
   const [exportNotes, setExportNotes] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [projectFieldsOpen, setProjectFieldsOpen] = useState(false);
+  const [drawingsBlockExpanded, setDrawingsBlockExpanded] = useState(false);
+  const [drawingStudioOpen, setDrawingStudioOpen] = useState(false);
+  const [studioDrawingId, setStudioDrawingId] = useState<string | null>(null);
+  const [regionWizard, setRegionWizard] = useState<{
+    spaceId: string;
+    drawingId: string;
+    shotIds: string[];
+    index: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!drawingStudioOpen || !selectedContext) return;
+    const list = selectedContext.space.drawings;
+    setStudioDrawingId((prev) =>
+      prev && list.some((d) => d.id === prev) ? prev : (list[0]?.id ?? null),
+    );
+  }, [drawingStudioOpen, selectedContext]);
+
+  useEffect(() => {
+    if (regionWizard) {
+      toggleDrawer(false);
+    }
+  }, [regionWizard, toggleDrawer]);
+
+  const studioDrawing = useMemo(() => {
+    if (!selectedContext || !studioDrawingId) return null;
+    return selectedContext.space.drawings.find((d) => d.id === studioDrawingId) ?? null;
+  }, [selectedContext, studioDrawingId]);
+
+  function finishDrawingStudio() {
+    if (!selectedContext || !studioDrawingId) return;
+    const drawing = selectedContext.space.drawings.find(
+      (d) => d.id === studioDrawingId,
+    );
+    if (!drawing) return;
+    const shotIds = drawing.screenshots
+      .filter(screenshotHasPricingRect)
+      .map((s) => s.id);
+    if (!shotIds.length) {
+      window.alert(
+        t(
+          "请先在图上框选至少一个计价区域。",
+          "Draw at least one quoting region first.",
+        ),
+      );
+      return;
+    }
+    setDrawingStudioOpen(false);
+    setRegionWizard({
+      spaceId: selectedContext.spaceId,
+      drawingId: drawing.id,
+      shotIds,
+      index: 0,
+    });
+  }
+
+  const wizardShotMeta = useMemo(() => {
+    if (!regionWizard || !selectedContext) return null;
+    const d = selectedContext.space.drawings.find(
+      (x) => x.id === regionWizard.drawingId,
+    );
+    const sh = d?.screenshots.find((s) => s.id === regionWizard.shotIds[regionWizard.index]);
+    if (!d || !sh) return null;
+    return { drawing: d, shot: sh };
+  }, [regionWizard, selectedContext]);
+
+  const regionWizardKick =
+    regionWizard === null
+      ? ""
+      : `${regionWizard.spaceId}|${regionWizard.drawingId}|${regionWizard.shotIds.join(",")}|${regionWizard.index}`;
+
+  useEffect(() => {
+    if (!regionWizard) return;
+    const sid = regionWizard.shotIds[regionWizard.index];
+    if (!sid) return;
+    ensureDedicatedItemForScreenshot(
+      regionWizard.spaceId,
+      regionWizard.drawingId,
+      sid,
+      { openConfigDrawer: false },
+    );
+  }, [regionWizardKick, regionWizard, ensureDedicatedItemForScreenshot]);
   const revIndex = project.revisions.findIndex(
     (r) => r.meta.id === project.activeRevisionId,
   );
@@ -128,9 +218,6 @@ export default function Workspace() {
       });
     }
   }
-
-  const t = (zh: string, en: string) => (uiLocale === "zh" ? zh : en);
-  const sym = CURRENCY_SYMBOL[rev.currency];
 
   return (
     <div className="flex h-screen flex-col">
@@ -447,62 +534,133 @@ export default function Workspace() {
             </div>
           ))}
           {selectedContext ? (
+            <>
+              {!drawingsBlockExpanded ? (
+                <button
+                  type="button"
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-line bg-white py-3 text-[11px] font-medium text-ink-secondary shadow-card hover:bg-surface-muted"
+                  onClick={() => setDrawingsBlockExpanded(true)}
+                  title={t("展开图纸与框选工具", "Expand drawings")}
+                >
+                  <Maximize2 size={14} />
+                  <span>{t("图纸", "DWG")}</span>
+                  <ChevronDown size={14} />
+                  {selectedContext.space.drawings.length ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0 text-[10px] text-amber-900">
+                      {selectedContext.space.drawings.length}
+                    </span>
+                  ) : null}
+                </button>
+              ) : (
             <div className="mt-4 rounded-2xl border border-line bg-surface-muted/40 p-3">
-              <div className="mb-2 text-xs font-semibold text-ink-tertiary">
-                {t("图纸上传", "Drawings")}
-              </div>
+              <button
+                type="button"
+                className="mb-3 flex w-full items-center justify-between gap-2 text-left"
+                onClick={() => setDrawingsBlockExpanded(false)}
+                aria-expanded
+              >
+                <span className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">
+                  {t("图纸上传", "Drawings")}
+                </span>
+                <ChevronUp size={16} className="shrink-0 text-ink-tertiary" />
+              </button>
+              <p className="mb-2 text-[11px] leading-relaxed text-ink-secondary">
+                {t(
+                  "侧栏仅管理文件。请在「全屏大图」里翻页与框选；完成后进入向导，「每个」计价区域会单独生成一条报价供配置。",
+                  "Use the sidebar for files only. Open full-screen to flip pages and frame regions; the wizard creates one quotation line per region.",
+                )}
+              </p>
+              <button
+                type="button"
+                disabled={selectedContext.space.drawings.length === 0}
+                className="mb-2 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-ink/15 bg-white px-3 py-2.5 text-xs font-medium text-ink shadow-sm hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() => {
+                  toggleDrawer(false);
+                  setStudioDrawingId(
+                    selectedContext.space.drawings[0]?.id ?? null,
+                  );
+                  setDrawingStudioOpen(true);
+                }}
+              >
+                <Maximize2 size={14} />
+                {t("打开全屏图纸工作台（推荐）", "Open full-screen drawing studio")}
+              </button>
               <input
                 type="file"
                 accept="image/*,application/pdf"
-                className="text-xs"
+                className="w-full text-xs"
                 key={selectedContext.spaceId}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f && selectedContext) {
-                    attachDrawing(selectedContext.spaceId, f);
-                    e.target.value = "";
+                  if (!f || !selectedContext) return;
+                  attachDrawing(selectedContext.spaceId, f);
+                  e.target.value = "";
+                  const rev = activeRevision(
+                    useQuotationStore.getState().project,
+                  );
+                  const space = rev.levels
+                    .flatMap((l) => l.spaces)
+                    .find((s) => s.id === selectedContext.spaceId);
+                  const last = space?.drawings.at(-1);
+                  if (last) {
+                    setStudioDrawingId(last.id);
+                    setDrawingStudioOpen(true);
+                    toggleDrawer(false);
                   }
                 }}
               />
-              <div className="mt-2 space-y-3">
-                {selectedContext.space.drawings.map((d) => (
-                  <DrawingRegionPicker
-                    key={d.id}
-                    uiLocale={uiLocale}
-                    drawing={d}
-                    items={selectedContext.space.items}
-                    onAddRegion={(norm, nameZh, nameEn, pdfPage) => {
-                      addDrawingRectRegion(
-                        selectedContext.spaceId,
-                        d.id,
-                        norm,
-                        nameZh,
-                        nameEn,
-                        pdfPage,
-                      );
-                    }}
-                    onLinkRegion={(screenshotId, itemIds) => {
-                      setScreenshotLinkedItems(
-                        selectedContext.spaceId,
-                        d.id,
-                        screenshotId,
-                        itemIds,
-                      );
-                    }}
-                    onRemoveScreenshot={(screenshotId) =>
-                      removeDrawingScreenshot(
-                        selectedContext.spaceId,
-                        d.id,
-                        screenshotId,
-                      )
-                    }
-                    onRemoveDrawing={() =>
-                      removeDrawing(selectedContext.spaceId, d.id)
-                    }
-                  />
-                ))}
+              <div className="mt-3 space-y-2 text-[11px]">
+                {selectedContext.space.drawings.map((d) => {
+                  const regionCount = d.screenshots.filter(
+                    screenshotHasPricingRect,
+                  ).length;
+                  return (
+                    <div
+                      key={d.id}
+                      className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-white px-2 py-2"
+                    >
+                      <span
+                        className="min-w-0 flex-1 truncate font-medium text-ink"
+                        title={d.fileName}
+                      >
+                        {d.fileName}
+                      </span>
+                      {regionCount > 0 ? (
+                        <span
+                          className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0 text-[10px] font-medium text-amber-900"
+                          title={t("已框选区域数", "Framed regions")}
+                        >
+                          {regionCount}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg bg-ink px-2 py-1 text-[10px] font-medium text-white"
+                        onClick={() => {
+                          toggleDrawer(false);
+                          setStudioDrawingId(d.id);
+                          setDrawingStudioOpen(true);
+                        }}
+                      >
+                        {t("大图", "Canvas")}
+                      </button>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-lg border border-line px-1.5 py-1 text-red-600 hover:bg-red-50"
+                        title={t("删除图纸", "Remove file")}
+                        onClick={() =>
+                          removeDrawing(selectedContext.spaceId, d.id)
+                        }
+                      >
+                        <Trash2 size={12} aria-hidden />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
+              )}
+            </>
           ) : null}
         </aside>
 
@@ -701,6 +859,215 @@ export default function Workspace() {
           </div>
         </div>
       </footer>
+
+      {drawingStudioOpen && selectedContext && studioDrawing ? (
+        <div className="fixed inset-0 z-[220] flex justify-center overflow-y-auto bg-black/55 p-2 pb-28 backdrop-blur-sm sm:p-4">
+          <div className="my-2 flex w-full max-w-[min(96vw,1600px)] flex-col rounded-3xl border border-line bg-surface-card shadow-2xl">
+            <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 rounded-t-3xl border-b border-line bg-surface-card/96 px-5 py-4 backdrop-blur-md">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">
+                  {t("① 选图与框选", "① Pick & frame")}
+                </div>
+                <div className="text-lg font-bold text-ink">
+                  {t("大图模式", "Large canvas")}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedContext.space.drawings.length > 1 ? (
+                  <select
+                    className="max-w-[15rem] rounded-xl border border-line bg-white px-3 py-2 text-xs"
+                    value={studioDrawingId ?? ""}
+                    onChange={(e) => setStudioDrawingId(e.target.value || null)}
+                  >
+                    {selectedContext.space.drawings.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.fileName}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                <button
+                  type="button"
+                  className="rounded-full p-2 hover:bg-surface-muted"
+                  onClick={() => setDrawingStudioOpen(false)}
+                  aria-label={t("关闭", "Close")}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-3 pb-2 pt-1 sm:px-5">
+              <DrawingRegionPicker
+                variant="studio"
+                showLinkSection={false}
+                uiLocale={uiLocale}
+                drawing={studioDrawing}
+                items={selectedContext.space.items}
+                onAddRegion={(norm, nameZh, nameEn, pdfPage) =>
+                  addDrawingRectRegion(
+                    selectedContext.spaceId,
+                    studioDrawing.id,
+                    norm,
+                    nameZh,
+                    nameEn,
+                    pdfPage,
+                  )
+                }
+                onLinkRegion={() => {}}
+                onRemoveScreenshot={(screenshotId) =>
+                  removeDrawingScreenshot(
+                    selectedContext.spaceId,
+                    studioDrawing.id,
+                    screenshotId,
+                  )
+                }
+                onRemoveDrawing={() => {
+                  removeDrawing(selectedContext.spaceId, studioDrawing.id);
+                  setDrawingStudioOpen(false);
+                }}
+              />
+            </div>
+
+            <div className="sticky bottom-0 flex flex-wrap justify-end gap-3 rounded-b-3xl border-t border-line bg-white/96 px-5 py-4 backdrop-blur">
+              <button
+                type="button"
+                className="rounded-full border border-line px-4 py-2 text-sm"
+                onClick={() => setDrawingStudioOpen(false)}
+              >
+                {t("稍后再说", "Later")}
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-ink px-5 py-2 text-sm font-medium text-white shadow-card"
+                onClick={finishDrawingStudio}
+              >
+                {t("框选完成 → 分项配置向导", "Framing done → wizard")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {regionWizard && selectedContext && wizardShotMeta ? (
+        <div className="fixed inset-0 z-[230] overflow-y-auto bg-surface-muted/98 pb-28 pt-14">
+          <div className="mx-auto flex max-w-3xl flex-col gap-4 px-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">
+                  {t(
+                    `② 配置分区 ${regionWizard.index + 1} / ${regionWizard.shotIds.length}`,
+                    `② Region ${regionWizard.index + 1}/${regionWizard.shotIds.length}`,
+                  )}
+                </div>
+                <div className="text-xl font-semibold text-ink">
+                  {wizardShotMeta.shot.name}
+                </div>
+                <div className="text-xs text-ink-secondary">
+                  {wizardShotMeta.drawing.fileName}
+                </div>
+                <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-secondary">
+                  {t(
+                    "本页只配置当前这一处框选；与上一分区互相独立。完成后点「下一个」切换。",
+                    "Configure only this framed region. It is independent from other regions. Use Next when done.",
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-full border border-line bg-white p-2 shadow-sm hover:bg-surface-muted"
+                onClick={() => {
+                  setRegionWizard(null);
+                  selectItem(undefined);
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="rounded-3xl border border-line bg-white p-4 shadow-card">
+              {!activeItem ||
+              !activeItem.screenshotIds.includes(wizardShotMeta.shot.id) ? (
+                <div className="py-16 text-center text-sm text-ink-secondary">
+                  {t(
+                    "正在准备本条报价明细…",
+                    "Preparing this line item…",
+                  )}
+                </div>
+              ) : (
+                <ConfigForm
+                  item={activeItem}
+                  uiLocale={uiLocale}
+                  showInternal={showInternal}
+                  currency={rev.currency}
+                  rates={rev.rates}
+                  onPatch={(patch) =>
+                    updateItem(selectedContext.spaceId, activeItem.id, patch)
+                  }
+                  onDuplicate={() =>
+                    duplicateItem(selectedContext.spaceId, activeItem.id)
+                  }
+                  onRemove={() =>
+                    removeItem(selectedContext.spaceId, activeItem.id)
+                  }
+                  onApplyText={(txt) =>
+                    applyOcrText(selectedContext.spaceId, activeItem.id, txt)
+                  }
+                />
+              )}
+            </div>
+          </div>
+
+          <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-[231] bg-gradient-to-t from-white via-white to-transparent pb-6 pt-10">
+            <div className="pointer-events-auto mx-auto flex max-w-3xl flex-wrap justify-between gap-3 px-6">
+              <button
+                type="button"
+                className={clsx(
+                  "rounded-full border border-line bg-white px-4 py-2 text-sm shadow-card",
+                  regionWizard.index <= 0 && "invisible pointer-events-none",
+                )}
+                disabled={regionWizard.index <= 0}
+                onClick={() =>
+                  setRegionWizard((w) =>
+                    w && w.index > 0 ? { ...w, index: w.index - 1 } : w,
+                  )
+                }
+              >
+                {t("上一个分区", "Previous region")}
+              </button>
+              <div className="flex gap-3">
+                {regionWizard.index < regionWizard.shotIds.length - 1 ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-ink px-5 py-2 text-sm font-medium text-white shadow-card"
+                    onClick={() =>
+                      setRegionWizard((w) =>
+                        w ? { ...w, index: w.index + 1 } : w,
+                      )
+                    }
+                  >
+                    {t(
+                      "保存并进入下一个分区 →",
+                      "Save & next region →",
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-full bg-emerald-700 px-5 py-2 text-sm font-medium text-white shadow-card"
+                    onClick={() => {
+                      setRegionWizard(null);
+                      selectItem(undefined);
+                    }}
+                  >
+                    {t("完成向导", "Finish")}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {diffOpen && prevRev ? (
         <DiffModal

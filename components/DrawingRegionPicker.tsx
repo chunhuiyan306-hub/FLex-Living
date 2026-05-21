@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { ChevronLeft, ChevronRight, ExternalLink, Square, Trash2, XCircle } from "lucide-react";
 import type { DrawingPage, DrawingScreenshot, QuotationItem } from "@/lib/domain/types";
+import { screenshotHasPricingRect } from "@/lib/domain/drawing-utils";
 
 type Norm = { nx: number; ny: number; nw: number; nh: number };
 
@@ -36,6 +37,9 @@ export default function DrawingRegionPicker({
   onLinkRegion,
   onRemoveScreenshot,
   onRemoveDrawing,
+  variant = "sidebar",
+  showLinkSection = true,
+  onRequestNewItemForScreenshot,
 }: {
   uiLocale: "zh" | "en";
   drawing: DrawingPage;
@@ -49,6 +53,9 @@ export default function DrawingRegionPicker({
   onLinkRegion: (screenshotId: string, itemIds: string[]) => void;
   onRemoveScreenshot: (screenshotId: string) => void;
   onRemoveDrawing: () => void;
+  variant?: "sidebar" | "studio";
+  showLinkSection?: boolean;
+  onRequestNewItemForScreenshot?: (screenshotId: string) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -76,12 +83,13 @@ export default function DrawingRegionPicker({
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
+  const studio = variant === "studio";
+
   const isPdf =
     drawing.mimeType === "application/pdf" ||
     drawing.fileName.toLowerCase().endsWith(".pdf");
 
   const canMark = !isPdf || pdfRendered;
-
   const t = useCallback(
     (zh: string, en: string) => (uiLocale === "zh" ? zh : en),
     [uiLocale],
@@ -159,8 +167,10 @@ export default function DrawingRegionPicker({
         const base = page.getViewport({ scale: 1 });
 
         const cw = wrapRef.current?.clientWidth ?? 0;
-        const maxW = Math.min(Math.max(cw, 280), 720);
-        const scale = Math.min(maxW / base.width, 2);
+        const capW = studio ? 1400 : 720;
+        const minWEl = studio ? 520 : 280;
+        const maxW = Math.min(Math.max(cw, minWEl), capW);
+        const scale = Math.min(maxW / base.width, studio ? 2.85 : 2);
         const viewport = page.getViewport({ scale });
 
         const cv = canvasRef.current;
@@ -186,7 +196,7 @@ export default function DrawingRegionPicker({
     return () => {
       alive = false;
     };
-  }, [drawing.previewUrl, drawing.id, isPdf, viewerPdfPage]);
+  }, [drawing.previewUrl, drawing.id, isPdf, viewerPdfPage, studio]);
 
   const finishDrag = () => {
     const el = innerRef.current;
@@ -243,7 +253,13 @@ export default function DrawingRegionPicker({
   };
 
   return (
-    <div className="rounded-2xl border border-line bg-white p-2 text-[11px]">
+    <div
+      className={clsx(
+        studio
+          ? "rounded-3xl border border-line bg-white p-4 text-sm shadow-card"
+          : "rounded-2xl border border-line bg-white p-2 text-[11px]",
+      )}
+    >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="truncate font-medium text-ink" title={drawing.name}>
           {drawing.fileName}
@@ -259,6 +275,25 @@ export default function DrawingRegionPicker({
       </div>
 
       {drawing.previewUrl ? (
+        studio ? (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line/70 bg-surface-muted/35 px-3 py-2 text-ink-secondary">
+            <span>
+              {t(
+                "多页图纸请用翻页；框选好后用底部按钮进入「逐项配置」。",
+                "Use page controls for PDFs; use the footer button to configure each region.",
+              )}
+            </span>
+            <a
+              href={drawing.previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex shrink-0 items-center gap-1 text-sky-700 hover:underline"
+            >
+              <ExternalLink size={12} />
+              {t("新窗口打开", "Open tab")}
+            </a>
+          </div>
+        ) : (
         <div className="mb-2 rounded-xl border border-dashed border-line/70 bg-surface-muted/30 px-2 py-2 text-ink-secondary [&_a]:text-sky-700 [&_a:hover]:underline">
           <ol className="list-decimal space-y-0.5 pl-4 leading-relaxed">
             <li>
@@ -275,8 +310,8 @@ export default function DrawingRegionPicker({
             </li>
             <li>
               {t(
-                "在下面「区域与报价行关联」里勾选对应报价行（可多选）。",
-                "Below, link each region to one or more quotation rows.",
+                "在关联区为「每个」区域选择一条报价行；需要新行时点「新建并绑定」。",
+                "Pick one quotation row per region; use “New row” when needed.",
               )}
             </li>
           </ol>
@@ -292,6 +327,7 @@ export default function DrawingRegionPicker({
             </a>
           </div>
         </div>
+        )
       ) : null}
 
       {isPdf && drawing.previewUrl && pdfNumPages > 1 && !pdfError ? (
@@ -324,13 +360,25 @@ export default function DrawingRegionPicker({
 
       <div
         ref={wrapRef}
-        className="relative flex w-full justify-center overflow-hidden rounded-xl bg-black/5 min-h-[120px]"
+        className={clsx(
+          "relative flex w-full justify-center overflow-hidden rounded-xl bg-black/5",
+          studio ? "min-h-[min(58vh,820px)]" : "min-h-[120px]",
+        )}
       >
         {isPdf && drawing.previewUrl ? (
-          <div ref={innerRef} className="relative inline-block max-h-[400px] max-w-full align-top">
+          <div
+            ref={innerRef}
+            className={clsx(
+              "relative inline-block max-w-full align-top",
+              studio ? "max-h-[min(85vh,1200px)]" : "max-h-[400px]",
+            )}
+          >
             <canvas
               ref={canvasRef}
-              className="mx-auto block max-h-[400px] max-w-full align-top opacity-95"
+              className={clsx(
+                "mx-auto block max-w-full align-top opacity-95",
+                studio ? "max-h-[min(85vh,1200px)]" : "max-h-[400px]",
+              )}
               aria-hidden={!pdfRendered}
             />
 
@@ -396,7 +444,7 @@ export default function DrawingRegionPicker({
             {pdfError ? (
               <div className="absolute inset-0 z-[4] overflow-auto bg-black/80 p-2 text-[11px] leading-snug text-white">
                 <div className="font-semibold">
-                  {t("PDF 无法在此侧边栏渲染", "Could not render PDF here")}
+                  {t("PDF 无法在此预览渲染", "Could not render PDF preview")}
                 </div>
                 <p className="mt-1 text-white/90">{pdfError.slice(0, 220)}</p>
                 <a
@@ -412,12 +460,21 @@ export default function DrawingRegionPicker({
             ) : null}
           </div>
         ) : drawing.previewUrl ? (
-          <div ref={innerRef} className="relative inline-block max-h-[400px] max-w-full align-top">
+          <div
+            ref={innerRef}
+            className={clsx(
+              "relative inline-block max-w-full align-top",
+              studio ? "max-h-[min(85vh,1200px)]" : "max-h-[400px]",
+            )}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={drawing.previewUrl}
               alt=""
-              className="mx-auto block max-h-[400px] max-w-full align-top"
+              className={clsx(
+                "mx-auto block max-w-full align-top",
+                studio ? "max-h-[min(85vh,1200px)]" : "max-h-[400px]",
+              )}
               draggable={false}
             />
             {drawing.screenshots.map((sh) => {
@@ -507,20 +564,22 @@ export default function DrawingRegionPicker({
         </button>
       </div>
 
+      {showLinkSection ? (
       <div className="mt-3 space-y-2 border-t border-line/70 pt-2">
         <div className="font-semibold text-ink-tertiary">
           {t("区域与报价行关联", "Link regions to line items")}
         </div>
-        {drawing.screenshots.length === 0 ? (
+        {drawing.screenshots.filter(screenshotHasPricingRect).length === 0 ? (
           <div className="text-ink-secondary">
             {t(
-              "画好矩形后会出现在此处，再把区域绑定到表格中的报价行。",
-              "Regions show up here; link each one to quotation rows.",
+              "画好矩形后会出现在此处，每条区域独占一行报价（单选绑定）。",
+              "Draw rectangles first; each region binds to exactly one quotation row.",
             )}
           </div>
         ) : (
-          drawing.screenshots.map((sh) => {
-            const ids = [...sh.linkedItemIds];
+          drawing.screenshots.filter(screenshotHasPricingRect).map((sh) => {
+            const pick = sh.linkedItemIds[0];
+            const sel = typeof pick === "string" ? pick : "";
             return (
               <div
                 key={sh.id}
@@ -545,24 +604,24 @@ export default function DrawingRegionPicker({
                   </button>
                 </div>
                 <label className="text-ink-secondary">
-                  {t("绑定报价项", "Link items")}
+                  {t("绑定一条报价项", "Link one line item")}
                   {items.length === 0 ? (
                     <div className="mt-1 rounded-xl border border-dashed border-line/80 bg-white/60 px-2 py-2 text-ink-tertiary">
                       {t("当前空间暂无报价行", "No line items in this space.")}
                     </div>
                   ) : (
+                    <>
                     <select
-                      multiple
-                      className="mt-1 w-full rounded-xl border border-line bg-white px-2 py-1 text-[11px]"
-                      size={Math.min(items.length, 5)}
-                      value={ids}
+                      className="mt-1 w-full rounded-xl border border-line bg-white px-2 py-1.5 text-[11px]"
+                      value={sel}
                       onChange={(e) => {
-                        const next = [...e.target.selectedOptions].map(
-                          (o) => o.value,
-                        );
-                        onLinkRegion(sh.id, next);
+                        const v = e.target.value;
+                        onLinkRegion(sh.id, v ? [v] : []);
                       }}
                     >
+                      <option value="">
+                        {t("（暂不绑定）", "(none)")}
+                      </option>
                       {items.map((it) => (
                         <option key={it.id} value={it.id}>
                           {uiLocale === "zh"
@@ -571,19 +630,24 @@ export default function DrawingRegionPicker({
                         </option>
                       ))}
                     </select>
+                    {onRequestNewItemForScreenshot ? (
+                      <button
+                        type="button"
+                        className="mt-1.5 w-full rounded-xl border border-dashed border-line bg-white py-1.5 text-[11px] font-medium text-ink hover:bg-surface-muted"
+                        onClick={() => onRequestNewItemForScreenshot(sh.id)}
+                      >
+                        {t("+ 新建报价行并绑定此区域", "+ New line & bind")}
+                      </button>
+                    ) : null}
+                    </>
                   )}
                 </label>
-                <p className="text-[10px] text-ink-tertiary">
-                  {t(
-                    "按住 Ctrl（Mac 用 ⌘）可点选多条。",
-                    "Ctrl/Cmd-click to select multiple rows.",
-                  )}
-                </p>
               </div>
             );
           })
         )}
       </div>
+      ) : null}
       {marking ? <span aria-hidden className="sr-only">{dragSeq}</span> : null}
     </div>
   );

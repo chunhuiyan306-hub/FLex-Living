@@ -196,6 +196,13 @@ export interface Store {
     screenshotId: string,
     linkedItemIds: string[],
   ) => void;
+  /** 保证该计价区域仅绑定一条独立报价行（无则新建），用于逐项配置向导 */
+  ensureDedicatedItemForScreenshot: (
+    spaceId: string,
+    drawingId: string,
+    screenshotId: string,
+    opts?: { openConfigDrawer?: boolean },
+  ) => string | null;
   removeDrawingScreenshot: (
     spaceId: string,
     drawingId: string,
@@ -264,6 +271,74 @@ function syncLineMeta(item: QuotationItem) {
     return;
   }
   item.thresholdWarnings = [];
+}
+
+/** 价格库首项为模板的空白报价行（「新增」与图纸分区向导共用） */
+function makeCatalogLineItem(template?: Partial<QuotationItem>): QuotationItem {
+  const lib = PRICE_LIBRARY[0];
+  const sampleRow = lib?.rows[0];
+  const item: QuotationItem = {
+    id: uid(),
+    productSystem: template?.productSystem ?? lib!.system,
+    sku: template?.sku ?? lib!.model,
+    nameZh: template?.nameZh ?? lib!.productNameZh,
+    nameEn: template?.nameEn ?? lib!.productNameEn,
+    quoteMethod: template?.quoteMethod ?? lib!.defaultPricingUnit,
+    dimensionsMm: template?.dimensionsMm ?? {},
+    qty: template?.qty ?? 1,
+    finishGrade:
+      template?.finishGrade ??
+      sampleRow?.finishGrade ??
+      "A",
+    finishMaterialZh:
+      template?.finishMaterialZh ?? sampleRow?.finishDescriptionZh ?? "",
+    finishMaterialEn:
+      template?.finishMaterialEn ?? sampleRow?.finishDescriptionEn ?? "",
+    hardwareNoteZh: template?.hardwareNoteZh ?? "",
+    hardwareNoteEn: template?.hardwareNoteEn ?? "",
+    lightingNoteZh: template?.lightingNoteZh ?? "",
+    lightingNoteEn: template?.lightingNoteEn ?? "",
+    remarkZh: template?.remarkZh ?? "",
+    remarkEn: template?.remarkEn ?? "",
+    screenshotIds: template?.screenshotIds ?? [],
+    libraryProductId:
+      template?.libraryProductId ??
+      template?.libraryRuleId ??
+      lib!.id,
+    libraryRuleId:
+      template?.libraryRuleId ??
+      template?.libraryProductId ??
+      lib!.id,
+    libraryRowId: template?.libraryRowId,
+    productImages:
+      template?.productImages ??
+      (lib!.productImageUrls ? [...lib!.productImageUrls] : []),
+    isFromPriceLibrary: template?.isFromPriceLibrary ?? true,
+    isManualPrice: template?.isManualPrice ?? false,
+    needReview: template?.needReview ?? false,
+    overrideReason: template?.overrideReason,
+    clientNotes: template?.clientNotes,
+    specificationZh: template?.specificationZh,
+    specificationEn: template?.specificationEn,
+    thresholdWarnings: [],
+    cost_details: template?.cost_details ?? {
+      factoryCost: 0,
+      distributorPointsPct: 0,
+      manualPriceOverrides: [],
+    },
+    quote_details: {
+      listPrice: sampleRow?.rrpCnyPerUnit ?? 0,
+      discountPct: 0,
+      marginPct: 0,
+      clientPrice: 0,
+      exclusions: lib!.exclusionZh,
+      nonStandardMultiplier: 1,
+      nonStandardConfirmed: false,
+      ...template?.quote_details,
+    },
+  };
+  syncLineMeta(item);
+  return item;
 }
 
 /** 升级或缓存损坏时：把仍指向已删 demo / 旧 id 的行迁回当前价格库（首项）。 */
@@ -418,67 +493,7 @@ export const useQuotationStore = create<Store>()(
             .flatMap((l) => l.spaces)
             .find((sp) => sp.id === spaceId);
           if (!space) return s;
-          const lib = PRICE_LIBRARY[0];
-          const sampleRow = lib.rows[0];
-          const item: QuotationItem = {
-            id: uid(),
-            productSystem: template?.productSystem ?? lib.system,
-            sku: template?.sku ?? lib.model,
-            nameZh: template?.nameZh ?? lib.productNameZh,
-            nameEn: template?.nameEn ?? lib.productNameEn,
-            quoteMethod:
-              template?.quoteMethod ?? lib.defaultPricingUnit,
-            dimensionsMm: template?.dimensionsMm ?? {},
-            qty: template?.qty ?? 1,
-            finishGrade: template?.finishGrade ?? sampleRow?.finishGrade ?? "A",
-            finishMaterialZh:
-              template?.finishMaterialZh ?? sampleRow?.finishDescriptionZh ?? "",
-            finishMaterialEn:
-              template?.finishMaterialEn ?? sampleRow?.finishDescriptionEn ?? "",
-            hardwareNoteZh: template?.hardwareNoteZh ?? "",
-            hardwareNoteEn: template?.hardwareNoteEn ?? "",
-            lightingNoteZh: template?.lightingNoteZh ?? "",
-            lightingNoteEn: template?.lightingNoteEn ?? "",
-            remarkZh: template?.remarkZh ?? "",
-            remarkEn: template?.remarkEn ?? "",
-            screenshotIds: template?.screenshotIds ?? [],
-            libraryProductId:
-              template?.libraryProductId ??
-              template?.libraryRuleId ??
-              lib.id,
-            libraryRuleId:
-              template?.libraryRuleId ??
-              template?.libraryProductId ??
-              lib.id,
-            libraryRowId: template?.libraryRowId,
-            productImages:
-              template?.productImages ??
-              (lib.productImageUrls ? [...lib.productImageUrls] : []),
-            isFromPriceLibrary: template?.isFromPriceLibrary ?? true,
-            isManualPrice: template?.isManualPrice ?? false,
-            needReview: template?.needReview ?? false,
-            overrideReason: template?.overrideReason,
-            clientNotes: template?.clientNotes,
-            specificationZh: template?.specificationZh,
-            specificationEn: template?.specificationEn,
-            thresholdWarnings: [],
-            cost_details: template?.cost_details ?? {
-              factoryCost: 0,
-              distributorPointsPct: 0,
-              manualPriceOverrides: [],
-            },
-            quote_details: {
-              listPrice: sampleRow?.rrpCnyPerUnit ?? 0,
-              discountPct: 0,
-              marginPct: 0,
-              clientPrice: 0,
-              exclusions: lib.exclusionZh,
-              nonStandardMultiplier: 1,
-              nonStandardConfirmed: false,
-              ...template?.quote_details,
-            },
-          };
-          syncLineMeta(item);
+          const item = makeCatalogLineItem(template);
           space.items.push(item);
           return {
             project: root,
@@ -486,6 +501,77 @@ export const useQuotationStore = create<Store>()(
             configDrawerOpen: true,
           };
         }),
+
+      ensureDedicatedItemForScreenshot: (
+        spaceId,
+        drawingId,
+        screenshotId,
+        opts,
+      ) => {
+        const openDrawer = opts?.openConfigDrawer !== false;
+        let out: string | null = null;
+        set((s) => {
+          const revA = activeRevision(s.project);
+          const spacePre = revA.levels
+            .flatMap((l) => l.spaces)
+            .find((sp) => sp.id === spaceId);
+          const drawingPre = spacePre?.drawings.find((d) => d.id === drawingId);
+          const shotPre = drawingPre?.screenshots.find(
+            (sh) => sh.id === screenshotId,
+          );
+          if (!spacePre || !drawingPre || !shotPre) return s;
+
+          const onlyIdPre = shotPre.linkedItemIds[0];
+          const existingPre =
+            shotPre.linkedItemIds.length === 1
+              ? spacePre.items.find((i) => i.id === onlyIdPre)
+              : undefined;
+          if (
+            existingPre &&
+            existingPre.screenshotIds.length === 1 &&
+            existingPre.screenshotIds[0] === screenshotId
+          ) {
+            out = existingPre.id;
+            return {
+              ...s,
+              selectedItemId: existingPre.id,
+              configDrawerOpen: openDrawer,
+            };
+          }
+
+          const root = structuredClone(s.project);
+          const rev = activeRevision(root);
+          const space = rev.levels
+            .flatMap((l) => l.spaces)
+            .find((sp) => sp.id === spaceId)!;
+          const drawing = space.drawings.find((d) => d.id === drawingId)!;
+          const shot = drawing.screenshots.find((sh) => sh.id === screenshotId)!;
+
+          const prev = [...shot.linkedItemIds];
+          for (const oid of prev) {
+            const it = space.items.find((i) => i.id === oid);
+            if (it) {
+              it.screenshotIds = it.screenshotIds.filter(
+                (x) => x !== screenshotId,
+              );
+            }
+          }
+          shot.linkedItemIds = [];
+
+          const item = makeCatalogLineItem({
+            screenshotIds: [screenshotId],
+          });
+          space.items.push(item);
+          shot.linkedItemIds = [item.id];
+          out = item.id;
+          return {
+            project: root,
+            selectedItemId: item.id,
+            configDrawerOpen: openDrawer,
+          };
+        });
+        return out;
+      },
 
       updateItem: (spaceId, itemId, patch) =>
         set((s) => {
