@@ -1,0 +1,17 @@
+---
+description: After code changes, automatically commit and push to GitHub without waiting for a separate user request.
+alwaysApply: true
+---
+
+# 自动同步 GitHub
+
+在本仓库（凡仕之家全案报价程序）中，**每当完成一批有意义的代码修改**（新功能、修复、重构等与任务相关的变更），在通过 `npm run build` 或至少确认无新增明显错误后，**主动执行**：
+
+1. `git status` / `git diff` 确认变更范围  
+2. **不要**提交密钥、`.env`、凭据或大段无关文件  
+3. `git add` 相关文件，用清晰的中文或英文短句写提交说明（说明「为什么」）  
+4. `git push` 到当前分支的 `origin`（默认 `main`）
+
+**不要**等用户说「上传到 GitHub」才推送；用户已明确要求工作完成后**自动更新远程仓库**。
+
+仍须遵守全局安全约定：不改 `git config`、不 `--force` 推送主分支、不因失败而随意 `amend` 已推送提交。
